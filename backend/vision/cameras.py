@@ -11,7 +11,46 @@ from pathlib import Path
 from . import gemini
 
 SETUP = Path(__file__).resolve().parents[2] / "setup"
-OVERHEAD_INDEX, WRIST_INDEX = 3, 2
+def _which_is_which(default=(3, 2)):
+    """Windows hands out camera numbers in whatever order the cameras were plugged in, so the
+    overhead phone and the gripper camera can swap numbers (it happened when the arm was moved
+    to another table). Look at both: the one that shows the paper markers is the overhead."""
+    forced = os.environ.get("PHANTOM_CAMERAS", "").strip()      # "overhead,wrist", for example "2,3"
+    if forced:
+        try:
+            a, b = (int(x) for x in forced.split(","))
+            return a, b
+        except ValueError:
+            pass
+    try:
+        import cv2
+        det = cv2.aruco.ArucoDetector(cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50),
+                                      cv2.aruco.DetectorParameters())
+        seen = {}
+        for i in (2, 3):
+            cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+            f = None
+            for _ in range(8):
+                ok, fr = cap.read()
+                if ok:
+                    f = fr
+                time.sleep(0.04)
+            cap.release()
+            if f is not None:
+                _c, ids, _r = det.detectMarkers(f)
+                seen[i] = 0 if ids is None else len(ids)
+        if seen.get(2, 0) >= 2 and seen.get(2, 0) > seen.get(3, 0):
+            return 2, 3
+        if seen.get(3, 0) >= 2 and seen.get(3, 0) > seen.get(2, 0):
+            return 3, 2
+    except Exception:
+        pass
+    return default
+
+
+OVERHEAD_INDEX, WRIST_INDEX = _which_is_which()
 BLACK_MEAN = 30          # a frame darker than this on average is the phone's black screen
 WHITE_SHARE = 0.6        # more than this share of near-white pixels is iVCam's "Waiting for connection" card
                          # (real desk frames have none: mean about 105, white share 0.00)
