@@ -44,7 +44,9 @@ class TableMap:
         return self.tpr * math.atan(JAW_CM / max(12.0, r_cm))
 
     def pan_for_bearing(self, rad):
-        return self.pan_zero + self.tpr * rad
+        # PHANTOM_PAN_TRIM: a sideways correction in motor steps for a table where the arm does not sit
+        # exactly where it did when the desk map was made (measured from one gripper camera correction)
+        return self.pan_zero + self.tpr * rad + float(os.environ.get("PHANTOM_PAN_TRIM") or 0)
 
     def locate(self, boxes):
         """boxes: {"bottle": [ymin, xmin, ymax, xmax] or None, "person": ...} in 0 to 1000 units.
