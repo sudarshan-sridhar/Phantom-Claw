@@ -57,6 +57,25 @@ def wrist_pan_for(box, pan_here, tpr, w=WRIST):
     return pan_here + w["pan_sign"] * off * tpr, xc
 
 
+def in_grid(scene_out, table, margin=3.0):
+    """Keep only the things lying inside the rectangle the four paper markers mark out. The
+    cups, phones and people's things around the edge of the table are not the arm's business."""
+    cm = getattr(table, "grid_cm", None) or ((-4.0, -4.0), (54.6, 37.0))
+    (x0, y0), (x1, y1) = cm
+    bx, by = table.base
+
+    def inside(it):
+        tx, ty = it["x_cm"] + bx, it["y_cm"] + by
+        return x0 - margin <= tx <= x1 + margin and y0 - margin <= ty <= y1 + margin
+
+    kept = [it for it in scene_out["items"] if inside(it)]
+    scene_out["outside"] = len(scene_out["items"]) - len(kept)
+    scene_out["items"] = kept
+    if scene_out.get("match") is not None and not any(scene_out["match"] is it for it in kept):
+        scene_out["match"] = None
+    return scene_out
+
+
 class Vision:
     def __init__(self, setup_dir=None, overhead_index=cameras.OVERHEAD_INDEX, wrist_index=cameras.WRIST_INDEX):
         d = Path(setup_dir) if setup_dir else cameras.SETUP
@@ -97,7 +116,7 @@ class Vision:
         from . import markers
         self.markers_used = markers.refresh(self.table, img)
         raw = gemini.ask_json(img, scene_prompt(name), size=(960, 540))
-        out = parse_scene(raw, self.table, want=name)
+        out = in_grid(parse_scene(raw, self.table, want=name), self.table)
         out["markers_used"] = self.markers_used
         self.last_scene = out
         return out
@@ -123,7 +142,8 @@ class Vision:
             "This photo is from a camera on a robot gripper looking down at a desk. The two grey jaws of the "
             "gripper are at the bottom edge of the picture; ignore them.")
         raw = gemini.ask_json(f, prompt, size=(960, 540))
-        out = parse_scene(raw, WristTable(pan, self.setup_dir), want=name)
+        wt = WristTable(pan, self.setup_dir)
+        out = in_grid(parse_scene(raw, wt, want=name), wt)
         out["markers_used"] = 0
         out["camera"] = "wrist"
         self.last_scene = out

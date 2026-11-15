@@ -1019,7 +1019,19 @@ class RealArm:
             if hits >= 2:
                 return "tug"
             if watcher is not None and getattr(watcher, "hand", False):
-                self._wait(0.4)     # give the hand a moment to close on it before the jaws open
+                # a hand is there: wait for it to take hold (a pull), a second and a half at most
+                t1, grabbed = self._now(), 0
+                while self._now() - t1 < 1.5:
+                    self._wait(0.03)
+                    now = {i: self._rd(i, POSITION) for i in ids}
+                    c = currents()
+                    if (any(abs(now[i] - ref[i]) > (TUG_TICKS if i != 6 else TUG_TICKS_GRIP) for i in ids)
+                            or any(abs(c[i] - base[i]) > TUG_MA for i in amps)):
+                        grabbed += 1
+                        if grabbed >= 2:
+                            return "hand and pull"
+                    else:
+                        grabbed = 0
                 return "hand"
         return None
     def _still_holding(self, grip):
@@ -1265,7 +1277,7 @@ class RealArm:
         self._emit("done")
         items = [public(i) for i in s["items"]]
         names = ", ".join(i["name"] for i in items) or "nothing"
-        extra = {"scene": items, "person": s.get("person")}
+        extra = {"scene": items, "person": s.get("person"), "camera": s.get("camera", "overhead")}
         detail = f"I can see {len(items)} things: {names}" + ("" if s.get("person") else "; no person seen")
         if isinstance(target, str):
             extra["match"] = public(s.get("match"))

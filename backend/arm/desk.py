@@ -49,9 +49,9 @@ ROLL_RANGE = (1110, 2950)  # inside what the camera cable allows (1100 to 2960)
 # never above open_max (the calibrated range is 1305 to 2788).
 WRIST_AIM = {
     "tiers": ("low",),           # tiers that aim with the wrist camera by default (PHANTOM_WRIST_AIM=all|low|off)
-    "rounds": 4,                 # at most this many looks
-    "angle_tol_deg": 6.0,        # within this, the roll is left alone
-    "offset_tol_px": 25.0,       # within this (640 wide picture), the pan is left alone
+    "rounds": 3,                 # at most this many looks
+    "angle_tol_deg": 9.0,        # within this, the roll is left alone
+    "offset_tol_px": 40.0,       # within this (640 wide picture), the pan is left alone
     "roll_ticks_per_deg": 4096 / 360.0,   # 11.38
     "roll_sign": -1,             # roll_new = roll_now + roll_sign * angle * ticks_per_deg
     "pan_px_per_tick": 1.4,

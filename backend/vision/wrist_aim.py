@@ -48,7 +48,7 @@ AIM = {
     "round_ratio": 1.8,        # a blob less elongated than this is round or square: no angle
     "cv_min_conf": 0.6,        # OpenCV's reading is used when at least this sure
     "gemini_min_conf": 0.5,    # and Gemini's when at least this sure
-    "gemini_timeout_s": 10.0,  # one Gemini call, all models together
+    "gemini_timeout_s": 4.0,  # one Gemini call, all models together
 }
 
 # Items with no long side: only the centre matters

@@ -550,7 +550,7 @@ class Pipeline:
 
     async def say_line(self, run: _Run, agent: str, text: str, gesture: bool) -> dict:
         """Speak one more line after the earlier ones in this request have played."""
-        text = plain_line(text)
+        text = await self.polish(agent, text)
         clip = await self.speak(agent, text)
         await self.wait_gestures(run)
         await self.set_state(agent, "speaking")
@@ -769,6 +769,10 @@ class Pipeline:
             if self.run_tools:
                 early = {i: asyncio.ensure_future(self.run_one_tool(c, chosen))
                          for i, c in enumerate(plan["laptop"]) if c["tool"] in tools.ANSWERS}
+            lk = result.get("look") or {}
+            if lk.get("camera") == "wrist":
+                # say plainly that the overhead camera is gone and what was done about it
+                await self.say_line(run, chosen, "I lost the overhead camera, so I looked with the gripper camera instead.", gesture=False)
             plan["say"] = await self.polish(chosen, plan["say"])
             clip = await self.speak(chosen, plan["say"])
             await self.wait_gestures(run)  # Merlin and the argument finish first
