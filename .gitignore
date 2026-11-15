@@ -31,3 +31,6 @@ setup/*_demo.json
 setup/teach_bottle_*.json
 # Hack Dearborn artwork and fonts: kept local until the owner decides whether they can be public
 overlay/assets/hd/
+
+# starter code downloaded from other projects
+third_party/
