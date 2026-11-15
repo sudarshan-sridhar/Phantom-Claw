@@ -77,9 +77,9 @@ def test_steps_get_the_characters_manner_and_scene_names():
                                      {"skill": "hand_over", "wait_s": 2}])
     assert not replaced
     pick, hand = plan["arm"]
-    assert pick == {"skill": "pick", "params": {"target": "red bull can", "pace": 0.25, "approach": "look_first",
+    assert pick == {"skill": "pick", "params": {"target": "red bull can", "pace": 0.65, "approach": "look_first",
                                                 "lift_cm_style": "low"}}
-    assert hand == {"skill": "hand_over", "params": {"wait_s": 6.0, "pace": 0.25}}
+    assert hand == {"skill": "hand_over", "params": {"wait_s": 6.0, "pace": 0.65}}
     assert any("dropped pick param speed" in i for i in issues)
     esc, _, _ = _check("escanor", "pass me the red bull", [{"skill": "pick", "target": "red bull can"}, {"skill": "hand_over"}])
     assert esc["arm"][0]["params"]["lift_cm_style"] == "high" and esc["arm"][1]["params"]["wait_s"] == 2.5
@@ -140,7 +140,7 @@ def test_old_single_skill_plans_still_pass():
     assert replaced
     # a single general skill as an object is read as a one step list
     plan, _, _ = _check("gowther", "point at the cup", {"skill": "point_at", "target": "cup"})
-    assert plan["arm"] == [{"skill": "point_at", "params": {"target": "cup", "pace": 0.6}}]
+    assert plan["arm"] == [{"skill": "point_at", "params": {"target": "cup", "pace": 0.9}}]
 
 
 def test_extras_are_capped_and_blocked_by_only():
@@ -177,7 +177,7 @@ def test_generic_and_many_requests_are_not_extras():
 def test_king_points_first_and_picks_when_asked_again():
     steps = [{"skill": "look"}, {"skill": "pick", "target": "sharpie"}, {"skill": "hand_over"}]
     plan, issues, _ = _check("king", "King, give me the Sharpie", steps)
-    assert plan["arm"] == [{"skill": "point_at", "params": {"target": "sharpie", "pace": 0.4}}]
+    assert plan["arm"] == [{"skill": "point_at", "params": {"target": "sharpie", "pace": 0.75}}]
     assert cast.outcome_of(_decision("king", "King, give me the Sharpie")) == "half"
     # he forgot the arm altogether: he still points at what was asked for
     plan, _, _ = _check("king", "King, give me the Sharpie", None)
@@ -195,10 +195,10 @@ def test_king_asked_again_does_not_get_away_with_pointing():
 
 
 def test_old_bottle_routines_in_a_desk_job_become_steps():
-    plan, issues, _ = _check("gowther", "just the bottle, nothing else", {"skill": "fetch_bottle", "pace": 0.6})
-    assert plan["arm"] == [{"skill": "pick", "params": {"target": "water bottle", "pace": 0.6, "approach": "direct",
+    plan, issues, _ = _check("gowther", "just the bottle, nothing else", {"skill": "fetch_bottle", "pace": 0.9})
+    assert plan["arm"] == [{"skill": "pick", "params": {"target": "water bottle", "pace": 0.9, "approach": "direct",
                                                         "lift_cm_style": "normal"}},
-                           {"skill": "hand_over", "params": {"wait_s": 3.0, "pace": 0.6}}]
+                           {"skill": "hand_over", "params": {"wait_s": 3.0, "pace": 0.9}}]
     plan, _, _ = _check("ban", "hand me something to drink", [{"skill": "grip_bottle"}])
     assert _skills(plan) == ["pick", "place"]
     # no bottle on the desk any more: fetch_bottle stays as it is
@@ -253,7 +253,7 @@ def test_desk_question_and_no_picture_mean_no_motion():
 def test_prompts_carry_the_scene_and_the_habits():
     d = _decision("gowther", "pass me the cup")
     up = cast.user_prompt("gowther", "pass me the cup", d)
-    assert "- cup: x -6, y 36, 36 cm away" in up and "You're holding: nothing." in up
+    assert "- cup: x -6, y 36" in up and " cm away" not in up and "You're holding: nothing." in up
     d = _decision("ban", "just the cup")
     assert "only or just" in cast.user_prompt("ban", "just the cup", d)
     sp = cast.system_prompt("king")
@@ -382,7 +382,7 @@ def test_desk_question_answered_by_gowther_without_motion(monkeypatch):
     assert res["agent"] == "gowther" and res["routed"]["by"] == "rules" and res["plan"]["arm"] is None
     assert all(c[1] != merlin.ROUTE_SYSTEM[:20] for c in calls)
     answer = res["followups"][-1]["text"]
-    assert answer.startswith("Six items.") and "cup 36 cm" in answer and "Red Bull can" in answer
+    assert answer.startswith("Six items.") and "cup" in answer and " cm" not in answer and "Red Bull can" in answer
     assert {e["skill"] for e in events if e["type"] == "arm"} <= {"gesture"}
     # where is one thing
     res = asyncio.run(_pipe(events, arm).handle("where is the cup", None, force_argue=False))

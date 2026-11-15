@@ -104,9 +104,9 @@ HAND_PROMPT = ('This is the view from a camera on a robot gripper that is holdin
 HAND = {
     "baseline_frames": 5,       # pictures averaged, right after the arm stops, as "nothing there"
     "diff": 28,                 # grey level change that counts as a changed pixel
-    "skin_share": 0.03,         # this share of the picture newly skin-coloured means a hand
-    "big_share": 0.30,          # or this share changed at all (a hand right at the lens)
-    "frames": 3,                # for this many pictures in a row
+    "skin_share": 0.02,         # this share of the picture newly skin-coloured means a hand
+    "big_share": 0.22,          # or this share changed at all (a hand right at the lens)
+    "frames": 2,                # for this many pictures in a row
 }
 
 
@@ -161,6 +161,12 @@ class HandWatcher(threading.Thread):
                         base = np.median(np.stack(stack), axis=0).astype(np.uint8)
                     continue
                 skin, big = hand_shares(base, f)
+                if self.save and self.checks % 10 == 0:
+                    try:
+                        cv2.imwrite(str(SETUP / "last_handover_watch.jpg"), cv2.resize(f, (640, 360)))
+                    except Exception:
+                        pass
+                self.levels = (round(skin, 3), round(big, 3))
                 self.checks += 1
                 streak = streak + 1 if (skin >= HAND["skin_share"] or big >= HAND["big_share"]) else 0
                 if streak >= HAND["frames"]:

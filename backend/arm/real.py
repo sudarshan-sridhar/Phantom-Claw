@@ -60,7 +60,8 @@ MOVE_WINDOW = 0.05                        # about one loop of the script (0.03 s
 FETCH_CLOSE_SPEED = 500
 LIFT_UP = 170                             # shoulder ticks to raise the bottle off the table
 PERSON_PAN = (950, 3250)
-TUG_TICKS, TUG_TICKS_GRIP = 14, 9
+TUG_TICKS, TUG_TICKS_GRIP = 8, 6
+TUG_MA = 70.0            # a joint drawing this much more or less current than when it settled is being pulled
 
 
 class _Stopped(Exception):
@@ -956,25 +957,40 @@ class RealArm:
             return None
 
     def _wait_for_take(self, seconds, watcher):
-        """'tug' when the bottle is pulled, 'hand' when the wrist camera sees a hand, None when time is up."""
+        """'tug' when the item is pulled, 'hand' when the wrist camera sees a hand, None when time is up.
+        A pull is felt two ways: a joint is moved off where it was holding, or a joint starts
+        working harder to stay there (its current changes). Either, twice in a row, counts."""
         self.trace.append(("offer", seconds))
         self._hold("offer")
         self._wait(S.FETCH_OFFER_SETTLE_S)
         ids = (1, 2, 3, 4, 6)
         ref = {i: self._rd(i, POSITION) for i in ids}
+        amps = (2, 3, 4, 6)
+
+        def currents():
+            return {i: (self._rd(i, CURRENT) & 0x7FFF) * 6.5 for i in amps}
+
+        base = currents()
+        for _ in range(4):                      # a short average, so one noisy read is not the baseline
+            self._wait(0.03)
+            c = currents()
+            base = {i: 0.7 * base[i] + 0.3 * c[i] for i in amps}
         if watcher is not None:
             watcher.armed = True
-        t0 = self._now()
+        t0, hits = self._now(), 0
         while self._now() - t0 < seconds:
             self._wait(0.03)
             now = {i: self._rd(i, POSITION) for i in ids}
-            if any(abs(now[i] - ref[i]) > (TUG_TICKS if i != 6 else TUG_TICKS_GRIP) for i in ids):
+            moved = any(abs(now[i] - ref[i]) > (TUG_TICKS if i != 6 else TUG_TICKS_GRIP) for i in ids)
+            c = currents()
+            pulled = any(abs(c[i] - base[i]) > TUG_MA for i in amps)
+            hits = hits + 1 if (moved or pulled) else 0
+            if hits >= 2:
                 return "tug"
             if watcher is not None and getattr(watcher, "hand", False):
-                self._wait(0.5)     # give the hand a moment to close on it before the jaws open
+                self._wait(0.4)     # give the hand a moment to close on it before the jaws open
                 return "hand"
         return None
-
     def _still_holding(self, grip):
         """True while the bottle is in the jaws. When the grip closes on the cap the gripper is told
         to squeeze 70 ticks further than where it stopped, so if the bottle slips out the jaws
@@ -1522,6 +1538,8 @@ class RealArm:
             {"placed_at": {"x_cm": round(x, 1), "y_cm": round(y, 1)}}
 
     def _skill_hand_over(self, wait_s, pace):
+        # hold it out long enough for a person to notice and reach, whoever is carrying it
+        wait_s = max(float(wait_s or 0), 9.0)
         k = S.fetch_stretch(pace)
         H, tier = self._held, self._held_tier
         name, grip = H["name"], H["grip"]

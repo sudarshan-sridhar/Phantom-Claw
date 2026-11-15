@@ -118,11 +118,11 @@ ARM_MAP = {
 # same ego numbers as fetch_bottle, pushed apart so the difference shows from across a table.
 # Merlin's check applies these to every step whatever the LLM wrote.
 ARM_MANNER = {
-    "escanor": {"pace": 0.8, "approach": "direct", "lift_cm_style": "high", "wait_s": 2.5},
-    "elizabeth": {"pace": 0.25, "approach": "look_first", "lift_cm_style": "low", "wait_s": 6.0},
+    "escanor": {"pace": 1.0, "approach": "direct", "lift_cm_style": "high", "wait_s": 2.5},
+    "elizabeth": {"pace": 0.65, "approach": "look_first", "lift_cm_style": "low", "wait_s": 6.0},
     "ban": {"pace": 1.0, "approach": "direct", "lift_cm_style": "normal", "wait_s": 2.0},
-    "king": {"pace": 0.4, "approach": "direct", "lift_cm_style": "normal", "wait_s": 2.0},
-    "gowther": {"pace": 0.6, "approach": "direct", "lift_cm_style": "normal", "wait_s": 3.0},
+    "king": {"pace": 0.75, "approach": "direct", "lift_cm_style": "normal", "wait_s": 2.0},
+    "gowther": {"pace": 0.9, "approach": "direct", "lift_cm_style": "normal", "wait_s": 3.0},
 }
 
 # Lines used when Merlin's check throws a plan away.
@@ -559,8 +559,8 @@ PLAN_HABITS = {
         "and hand it over by the shortest route, nothing else, and grumble."
     ),
     "gowther": (
-        "Desk jobs: exactly what was asked, nothing extra. Say the distance in cm from the desk list in your line "
-        "(\"The cup. 36 cm.\")."
+        "Desk jobs: exactly what was asked, nothing extra. Never say a distance or a number; the owner can see "
+        "the desk (\"The cup. Coming over.\")."
     ),
 }
 
@@ -593,7 +593,7 @@ def scene_lines(scene: list[dict]) -> list[str]:
     out = []
     for it in scene or []:
         bits = [f"x {it.get('x_cm', 0):.0f}", f"y {it.get('y_cm', 0):.0f}",
-                f"{it.get('dist_cm', 0):.0f} cm away {_side(it.get('bearing'))}".strip()]
+                f"{_side(it.get('bearing'))}".strip()]
         bits.append(f"{it.get('tier', '?')} tier")
         bits.append("graspable" if it.get("graspable", True) else "can't be gripped")
         if it.get("axis_deg") is not None:
@@ -752,9 +752,9 @@ ARM_FOLLOW = {
         "failed": "Didn't work. Oh well.",
     },
     "gowther": {
-        "handed_over": "Handed over. The {item} was {dist} cm out.",
+        "handed_over": "Handed over.",
         "placed": "Placed the {item}.",
-        "pointed": "That's the {item}, {dist} cm away.",
+        "pointed": "That's the {item}.",
         "not_taken": "Not taken. The {item} is back where it was.",
         "missed": "Two grips missed. I stopped.",
         "not_found": "There's no {item} on the desk.",
@@ -816,9 +816,9 @@ def scene_answer(agent: str, text: str, scene: list[dict]) -> str:
     if not re.search(r"\b(what|everything|all)\b", text or "", re.I):
         asked = match_name(scene, text)
     if asked:
-        return (f"The {pretty_name(asked['name'])}'s {asked.get('dist_cm', 0):.0f} cm from the arm, "
+        return (f"The {pretty_name(asked['name'])} is on the desk, "
                 f"{_side(asked.get('bearing')) or 'right in front'}.")
-    parts = [f"{pretty_name(it['name'])} {it.get('dist_cm', 0):.0f} cm" for it in scene[:8]]
+    parts = [f"{pretty_name(it['name'])}" for it in scene[:8]]
     joined = ", ".join(parts[:-1]) + " and " + parts[-1] if len(parts) > 1 else parts[0]
     joined = joined[0].upper() + joined[1:] if agent in ("gowther", "king", "ban") else joined
     line = _SCENE_OPEN.get(agent, "{list}.").format(list=joined, n=_NUM.get(len(scene), str(len(scene))))

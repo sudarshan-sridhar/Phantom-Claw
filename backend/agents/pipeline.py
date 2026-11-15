@@ -25,6 +25,24 @@ from .cast import AGENT_IDS, CAST
 Emit = Callable[[dict], Awaitable[None]]
 
 
+_CM = re.compile(r"\s*[,(]?\s*\b\d+(\.\d+)?\s*(cm|centimet(er|re)s?)\b\)?(\s+(away|out|off))?", re.I)
+
+
+def plain_line(text: str) -> str:
+    """A spoken line with any measurement taken out. The owner can see the desk."""
+    out = _CM.sub("", text or "")
+    out = re.sub(r"\s+([.,!?])", r"\1", out)
+    out = re.sub(r"\s{2,}", " ", out).strip()
+    return out or (text or "")
+
+
+POLISH_SYSTEM = (
+    "You tidy one line that a character in a desk robot team is about to say out loud. Keep what it means and "
+    "keep the character's manner. Make it sound like a person talking: plain words, one or two short sentences, "
+    "at most 16 words. No numbers, no measurements, no lists, no stage directions, no emoji, nothing about being "
+    'an AI. If the line is already fine, return it unchanged. Reply with JSON only: {"say": "..."}'
+)
+
 def clock_now() -> datetime:
     """Laptop clock, or PHANTOM_CLOCK=HH:MM for testing Escanor's moods."""
     fake = os.environ.get("PHANTOM_CLOCK", "").strip()
@@ -108,6 +126,23 @@ class Pipeline:
 
     async def error(self, where: str, message: str) -> None:
         await self.emit({"type": "error", "where": where, "message": message[:300]})
+
+    async def polish(self, agent: str, line: str) -> str:
+        """Claude tidies a line written by one of the other models, so every character sounds like
+        a person. Skipped for characters that already run on Claude, and never allowed to hold
+        things up: after 2.5 s the line goes out as it was."""
+        line = plain_line(line)
+        if os.environ.get("PHANTOM_CHATTER", "").strip() == "1" or os.environ.get("PHANTOM_POLISH", "1") != "1":
+            return line
+        if CAST.get(agent, {}).get("provider") == "anthropic" or not line:
+            return line
+        try:
+            user = f"Character: {CAST[agent]['name']}. Line: {line}"
+            obj, _info = await asyncio.wait_for(providers.get_json("anthropic", POLISH_SYSTEM, user), 2.5)
+            new = plain_line(str(obj.get("say") or "").strip())
+            return new if 2 < len(new) <= len(line) + 40 else line
+        except Exception:  # noqa: BLE001 - a missing polish must never stop a job
+            return line
 
     async def speak(self, agent: str, text: str) -> dict:
         """Make the clip. Returns {"audio_url", "duration_s"}; on failure audio_url is None."""
@@ -515,6 +550,7 @@ class Pipeline:
 
     async def say_line(self, run: _Run, agent: str, text: str, gesture: bool) -> dict:
         """Speak one more line after the earlier ones in this request have played."""
+        text = plain_line(text)
         clip = await self.speak(agent, text)
         await self.wait_gestures(run)
         await self.set_state(agent, "speaking")
@@ -733,6 +769,7 @@ class Pipeline:
             if self.run_tools:
                 early = {i: asyncio.ensure_future(self.run_one_tool(c, chosen))
                          for i, c in enumerate(plan["laptop"]) if c["tool"] in tools.ANSWERS}
+            plan["say"] = await self.polish(chosen, plan["say"])
             clip = await self.speak(chosen, plan["say"])
             await self.wait_gestures(run)  # Merlin and the argument finish first
 
