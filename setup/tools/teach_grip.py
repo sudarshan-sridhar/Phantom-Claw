@@ -161,10 +161,13 @@ def main():
     beep(1000, 300)
     bus.torque_off()
     try:
-        # Two holds only: jaws on it, then squeezed shut. The pose above is worked out from the grip.
-        grasp, s1 = hold_and_read(bus, "Jaws on it.", a.wait)
-        shut, s2 = hold_and_read(bus, "Squeeze.", a.wait * 0.6)
-        above, s3 = {**grasp, **via_from_grasp(grasp)}, 0
+        # One hold: the jaws closed on the object, held still. That is the grip pose. How wide to
+        # open on the way in and the pose above are worked out from it.
+        shut, s2 = hold_and_read(bus, "Close the jaws on it and hold.", a.wait)
+        s1 = s3 = 0
+        grasp = dict(shut)
+        grasp["gripper"] = min(2400, shut["gripper"] + 330)
+        above = {**grasp, **via_from_grasp(grasp)}
     finally:
         bus.close()
     via_taught = None

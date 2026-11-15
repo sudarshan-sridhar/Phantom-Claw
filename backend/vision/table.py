@@ -291,7 +291,7 @@ def _spot(name, v):
         return None
     via = _pose(v.get("via")) or {**grasp, "lift": grasp["lift"] - VIA_LIFT}
     out = {"spot": name, "r_cm": float(r), "via": via, "grasp": grasp}
-    for k in ("pan", "roll", "rel_axis_deg", "gripper_open", "gripped_at"):
+    for k in ("pan", "roll", "rel_axis_deg", "gripper_open", "gripped_at", "seen_pan"):
         if isinstance(v.get(k), (int, float)) and not isinstance(v.get(k), bool):
             out[k] = float(v[k])
     return out

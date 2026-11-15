@@ -313,7 +313,12 @@ def pick_plan(item, tiers, pan_range):
         roll = int(round(sum(rolls) / len(rolls))) if rolls else None
     elif tier_name == "low" and item.get("axis_deg") is not None:
         roll = jaw_roll(item["axis_deg"], at["bearing"], zero=tier.roll_zero(ROLL_SIGN, ROLL_ZERO))
-    return {"tier": tier, "via": via, "grasp": grasp, "t": t, "pan": int(at["pan"]), "roll": roll,
+    # Where the hand put the jaws when this height was taught, against where the camera said to
+    # turn for the same spot: the difference is this height's own sideways correction (a standing
+    # thing is seen leaning in the overhead picture, so its bearing reads a little off).
+    bias = [s["pan"] - s["seen_pan"] for s in tier.spots if s.get("seen_pan") is not None and s.get("pan") is not None]
+    pan = int(at["pan"]) + (int(round(sum(bias) / len(bias))) if bias else 0)
+    return {"tier": tier, "via": via, "grasp": grasp, "t": t, "pan": pan, "roll": roll,
             "dist_cm": at["dist_cm"]}
 
 
