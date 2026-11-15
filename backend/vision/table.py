@@ -113,6 +113,37 @@ class TableMap:
         bx, by = self._arm_xy(x2 * sx, y2 * sy)
         return axis_angle(bx - ax, by - ay)
 
+class WristTable(TableMap):
+    """The desk as the gripper camera sees it from its look-down pose, for one base angle.
+    Used when the overhead camera gives no picture. setup/wrist_map.json (made by
+    setup/tools/wrist_map.py) turns a pixel into centimetres ahead and to the right of where
+    the arm is facing; the base angle then turns that into the usual arm frame."""
+
+    def __init__(self, pan, setup_dir=None):
+        d = Path(setup_dir) if setup_dir else SETUP
+        super().__init__(d / "table_map.json")
+        with open(d / "wrist_map.json") as f:
+            wm = json.load(f)
+        self.Hw = wm["homography_px_to_cm"]
+        self.image_size = wm["image_size"]
+        self.pose = wm["pose"]
+        self.heading = (pan - self.pan_zero) / self.tpr
+
+    def _arm_xy(self, x_px, y_px):
+        lat, fwd = _perspective(self.Hw, x_px, y_px)
+        h = self.heading
+        return fwd * math.sin(h) + lat * math.cos(h), fwd * math.cos(h) - lat * math.sin(h)
+
+
+def wrist_map(setup_dir=None):
+    """The saved gripper camera map, or None when it has not been made."""
+    p = (Path(setup_dir) if setup_dir else SETUP) / "wrist_map.json"
+    try:
+        with open(p) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
 
 class Taught:
     """The taught middle and far grips, blended by distance."""

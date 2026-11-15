@@ -60,6 +60,7 @@ def wrist_pan_for(box, pan_here, tpr, w=WRIST):
 class Vision:
     def __init__(self, setup_dir=None, overhead_index=cameras.OVERHEAD_INDEX, wrist_index=cameras.WRIST_INDEX):
         d = Path(setup_dir) if setup_dir else cameras.SETUP
+        self.setup_dir = d
         self.table = TableMap(d / "table_map.json")
         self.overhead_index, self.wrist_index = overhead_index, wrist_index
         self._wrist = None
@@ -98,6 +99,33 @@ class Vision:
         raw = gemini.ask_json(img, scene_prompt(name), size=(960, 540))
         out = parse_scene(raw, self.table, want=name)
         out["markers_used"] = self.markers_used
+        self.last_scene = out
+        return out
+
+    def wrist_scene(self, pan, name=None):
+        """The same answer as scene(), from one gripper camera picture taken at the look-down
+        pose with the base at this pan. None when the camera gives no picture or the map is missing."""
+        from .table import WristTable, wrist_map
+        if wrist_map(self.setup_dir) is None:
+            return None
+        if self._wrist is None:
+            self._wrist = cameras.WristCamera(self.wrist_index)
+        f = self._wrist.frame()
+        if f is None:
+            return None
+        try:
+            import cv2
+            cv2.imwrite(str(cameras.SETUP / "last_wrist_scene.jpg"), cv2.resize(f, (640, 360)))
+        except Exception:
+            pass
+        prompt = scene_prompt(name).replace(
+            "This is a photo of a desk from above.",
+            "This photo is from a camera on a robot gripper looking down at a desk. The two grey jaws of the "
+            "gripper are at the bottom edge of the picture; ignore them.")
+        raw = gemini.ask_json(f, prompt, size=(960, 540))
+        out = parse_scene(raw, WristTable(pan, self.setup_dir), want=name)
+        out["markers_used"] = 0
+        out["camera"] = "wrist"
         self.last_scene = out
         return out
 

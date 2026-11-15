@@ -1133,8 +1133,55 @@ class RealArm:
         except Exception as e:
             raise Refuse("not_found", f"the overhead look failed ({type(e).__name__}: {str(e)[:120]})")
         if s is None:
-            raise Refuse("no_picture", "the overhead camera gives no picture")
+            s = self._wrist_scene(name)
         return s
+
+    def _wrist_scene(self, name=None):
+        """No overhead picture: look for ourselves. Lift the gripper to its look-down pose and
+        take a picture straight ahead, then to the left and to the right if what was asked for
+        is not found yet. Each picture is placed on the desk with the gripper camera's own map."""
+        from backend.vision.table import wrist_map
+        wm = wrist_map(self.setup_dir) if hasattr(self.vision, "wrist_scene") else None
+        if wm is None:
+            raise Refuse("no_picture", "the overhead camera gives no picture and the gripper camera has no desk map")
+        pose, tpr = wm["pose"], self.table.tpr
+        lo, hi = self.rng[1][0] + 30, self.rng[1][1] - 30
+        self._used_wrist_scene = True
+        merged = None
+        for turn in (0.0, -0.6, 0.6):          # radians from straight ahead
+            pan = int(max(lo, min(hi, self.table.pan_zero + turn * tpr)))
+            here = self._rd(1, POSITION)
+            dur = max(1.6, abs(pan - here) / 350.0)
+            self._emit("looking")
+            self._blend([(1, pan, 0, dur)] + self._three(pose, dur), settle=True)
+            self._hold("picture")
+            self._wait(0.35)
+            at = self._rd(1, POSITION)
+            try:
+                s = self._call_vision(lambda: self.vision.wrist_scene(at, name=name))
+            except _Stopped:
+                raise
+            except Exception:
+                s = None
+            if s is None:
+                continue
+            if merged is None:
+                merged = s
+            else:
+                for it in s["items"]:
+                    near = [m for m in merged["items"]
+                            if math.hypot(m["x_cm"] - it["x_cm"], m["y_cm"] - it["y_cm"]) < 6.0]
+                    if not near:
+                        merged["items"].append(it)
+                if s.get("match") and not merged.get("match"):
+                    merged["match"] = s["match"]
+                if s.get("person") and not merged.get("person"):
+                    merged["person"] = s["person"]
+            if name and merged.get("match"):
+                break
+        if merged is None:
+            raise Refuse("no_picture", "neither the overhead camera nor the gripper camera gave a usable picture")
+        return merged
 
     def _find_target(self, target):
         """(item, scene) for a spoken name, or for a desk position (the item nearest it)."""

@@ -1,0 +1,32 @@
+{
+ "note": "gripper camera picture (upright, pixels) to [cm to the right, cm ahead] of where the arm faces, from the look-down pose. Made by setup/tools/wrist_map.py.",
+ "pose": {
+  "lift": 1151,
+  "elbow": 2552,
+  "wrist_flex": 2863
+ },
+ "image_size": [
+  1280,
+  720
+ ],
+ "homography_px_to_cm": [
+  [
+   0.058629923567398844,
+   0.022066224921722114,
+   -47.8757172793557
+  ],
+  [
+   0.013420632603823823,
+   -0.06808071222569857,
+   70.6324758022843
+  ],
+  [
+   0.00019064241026987112,
+   0.0007593350287391287,
+   1.0
+  ]
+ ],
+ "corners": 20,
+ "median_error_cm": 1.52,
+ "made": "2026-11-15T08:37:01"
+}
