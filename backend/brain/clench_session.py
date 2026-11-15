@@ -1,4 +1,4 @@
-"""clench-calibrate and signal: the spoken jaw-clench calibration, and a short read-out for
+﻿"""clench-calibrate and signal: the spoken jaw-clench calibration, and a short read-out for
 judging a seat without calibrating anything."""
 from __future__ import annotations
 
@@ -61,30 +61,30 @@ def clench_calibrate(reader: Reader, quick: bool = False, out_path: Path = CLENC
     _collect(reader, rows, "rest", rest_s, settle_s=1.5)
     speech.beep(660, 150)
 
-    speech.say(f"Now {n} jaw clenches. At the high beep, bite down hard and hold. At the low beep, let go.")
+    speech.say(f"Now {n} jaw clenches. When I say bite, bite down hard and keep holding. When I say let go, relax.")
     for i in range(n):
-        speech.beep(1000, 120)
+        speech.say("Bite.")
         if sim is not None:
             sim.act("clench", True, delay_s=0.35)
-        _collect(reader, rows, "clench", 2.0, event=i)
-        speech.beep(500, 120)
+        _collect(reader, rows, "clench", 3.0, event=i)
+        speech.say("Let go.")
         if sim is not None:
             sim.act("clench", False, delay_s=0.3)
         _collect(reader, rows, "clench", CLENCH_TAIL_S, event=i)
         _collect(reader, rows, "gap", 3.0 - CLENCH_TAIL_S, event=i)
 
-    speech.say("Now count out loud, in a quiet normal voice, one, two, three, and keep going until the beep.")
+    speech.say("Now count out loud, in a quiet normal voice, one, two, three, and keep going until I say stop.")
     speech.beep(880, 150)
     if sim is not None:
         sim.act("talk", True, delay_s=0.4)
     _collect(reader, rows, "talk", talk_s, settle_s=0.5)
     if sim is not None:
         sim.act("talk", False)
-    speech.beep(660, 150)
+    speech.say("Stop.")
 
-    speech.say(f"Last, {n} hard blinks, one at each beep.")
+    speech.say(f"Last, {n} hard blinks, one each time I say blink.")
     for i in range(n):
-        speech.beep(880, 100)
+        speech.say("Blink.")
         if sim is not None:
             sim.act("blink", delay_s=0.3)
         _collect(reader, rows, "blink", 2.0, event=i)
