@@ -67,7 +67,11 @@ const App = (() => {
   // The pets live on the L made by the bottom edge and the right edge of the screen, out of
   // the way of the work in the middle. Any pet may stand anywhere along it, and they change
   // places now and then.
-  const onTheL = (p) => (Math.random() < 0.62 ? SURFACES.floor(p, 0.04, 0.96) : SURFACES.right(p, 0.10, 0.86));
+  // A pet picks its edge once and then only moves along it, so it never cuts across the screen.
+  const onTheL = (p) => {
+    if (!p.edge) p.edge = Math.random() < 0.62 ? 'floor' : 'right';
+    return p.edge === 'floor' ? SURFACES.floor(p, 0.04, 0.96) : SURFACES.right(p, 0.10, 0.86);
+  };
   const HOME = { escanor: onTheL, elizabeth: onTheL, ban: onTheL, king: onTheL, gowther: onTheL, merlin: onTheL };
   const ROAM = HOME;
   function pick(fns) { return fns[Math.floor(Math.random() * fns.length)](); }
