@@ -8,8 +8,11 @@ from typing import Callable, Protocol
 PHASES = ("auto_rest", "start", "seen", "at_target", "gripped", "lifted", "carrying", "offering", "handed_over",
           "put_back", "missed", "returning", "done", "error")
 RESULTS = ("done", "handed_over", "put_back", "missed", "no_bottle", "out_of_reach", "turn_failed",
-           "stopped", "error", "busy")
-OK_RESULTS = ("done", "handed_over", "put_back")   # the skill did its job (put_back: nobody took the bottle)
+           "stopped", "error", "busy",
+           # the general skills (look, point_at, pick, place, hand_over)
+           "holding", "placed", "not_found", "no_picture", "not_taught", "not_graspable", "nothing_held",
+           "not_taken", "hands_full")
+OK_RESULTS = ("done", "handed_over", "put_back", "holding", "placed")   # the skill did its job
 
 # skill -> {parameter: default}. Parameters not listed here are dropped by validate().
 SKILLS = {
@@ -20,8 +23,17 @@ SKILLS = {
     "wave": {},
     "rest": {},
     "gesture": {"style": "gowther", "seconds": 3.0},
+    # general building blocks: any item on the desk, no fixed routine (backend/arm/README.md)
+    "look": {"target": None},
+    "point_at": {"target": None, "pace": 0.5},
+    "pick": {"target": None, "pace": 0.5, "approach": "direct", "lift_cm_style": "normal"},
+    "place": {"where": "back", "pace": 0.5, "approach": "direct"},
+    "hand_over": {"wait_s": 3.0, "pace": 0.5},
 }
+GENERAL = ("look", "point_at", "pick", "place", "hand_over")
 RANGES = {"pace": (0.0, 1.0), "hold_s": (1.0, 8.0), "wait_s": (2.0, 6.0), "seconds": (1.5, 10.0)}
+CHOICES = {"approach": ("direct", "look_first"), "lift_cm_style": ("low", "normal", "high")}
+SIDES = ("left", "right", "front", "behind")
 STYLES = ("escanor", "elizabeth", "ban", "king", "gowther", "merlin")
 
 
@@ -63,6 +75,8 @@ def validate(skill, params=None):
     if skill not in SKILLS:
         raise ValueError(f"unknown arm skill: {skill!r}")
     params = params if isinstance(params, dict) else {}
+    if "approach" in SKILLS[skill] and "approach" not in params and _flag(params.get("look_first"), False):
+        params = {**params, "approach": "look_first"}     # the fetch_bottle name for the same manner
     out = {}
     for key, default in SKILLS[skill].items():
         v = params.get(key, default)
@@ -71,9 +85,57 @@ def validate(skill, params=None):
             out[key] = s if s in STYLES else default
         elif key in RANGES:
             out[key] = _num(v, default, *RANGES[key])
+        elif key in CHOICES:
+            s = v.strip().lower().replace(" ", "_") if isinstance(v, str) else ""
+            out[key] = s if s in CHOICES[key] else default
+        elif key == "target":
+            out[key] = _target(v)
+        elif key == "where":
+            out[key] = _where(v)
         else:
             out[key] = _flag(v, default)
     return out
+
+
+def _xy(v):
+    if isinstance(v, dict):
+        x, y = _num(v.get("x_cm"), None, -200, 200), _num(v.get("y_cm"), None, -200, 200)
+        if x is not None and y is not None:
+            return {"x_cm": x, "y_cm": y}
+    return None
+
+
+def _name(v):
+    if isinstance(v, str):
+        s = " ".join(v.strip().split())[:60]
+        return s or None
+    return None
+
+
+def _target(v):
+    """An item name (str) or a desk position {"x_cm", "y_cm"}; None when neither."""
+    return _xy(v) or _name(v)
+
+
+def _where(v):
+    """"back", {"x_cm", "y_cm"} or {"near": name, "side": left|right|front|behind}. A plain name
+    means in front of that item (the side nearer the arm)."""
+    if v is None:
+        return "back"
+    if isinstance(v, str):
+        s = _name(v)
+        if s is None or s.lower() in ("back", "where it was", "put it back", "original"):
+            return "back"
+        return {"near": s, "side": "front"}
+    if isinstance(v, dict):
+        xy = _xy(v)
+        if xy:
+            return xy
+        near = _name(v.get("near"))
+        if near:
+            side = v.get("side").strip().lower() if isinstance(v.get("side"), str) else ""
+            return {"near": near, "side": side if side in SIDES else "front"}
+    return "back"
 
 
 def result(res, detail="", **extra):
@@ -174,9 +236,53 @@ def fetch_nominal(pace, wait_s, look_first, outcome="handed_over", turn_ticks=60
             + FETCH_AFTER_OPEN_S + FETCH_VIA_S * k + FETCH_REST_S * k)
 
 
+# The general skills reuse the fetch_bottle legs and the same pace stretch.
+POINT_AT_RAISE = 120         # point_at: shoulder this much above the pose over the item, so nothing is touched
+POINT_AT_HOLD_S = 2.0
+TURN_TICKS = 600             # a typical base turn, for the time estimates
+
+
+def general_nominal(skill, p, outcome=None):
+    """About how long one of the general skills takes, in seconds, for one outcome."""
+    k = fetch_stretch(p.get("pace", 0.5))
+    look_first = p.get("approach") == "look_first"
+    turn = max(FETCH_TURN_MIN_S, TURN_TICKS / FETCH_TURN_RATE) * k
+    if skill == "look":
+        return FETCH_LOOK_S
+    if skill == "point_at":
+        look = 0.0 if isinstance(p.get("target"), dict) else FETCH_LOOK_S
+        if outcome in ("not_found", "out_of_reach", "no_picture"):
+            return look
+        return look + FETCH_OUT_S * k + POINT_AT_HOLD_S + FETCH_REST_S * k
+    if skill == "pick":
+        if outcome in ("not_found", "out_of_reach", "no_picture", "not_taught", "not_graspable"):
+            return FETCH_LOOK_S
+        t = FETCH_LOOK_S + FETCH_OUT_S * k + (FETCH_LOOK_FIRST_S if look_first else 0.0) + FETCH_APPROACH_S * k + FETCH_CLOSE_S
+        if outcome == "missed":
+            return t + FETCH_RELEASE_S + FETCH_VIA_S * k + FETCH_REST_S * k
+        return t + FETCH_TUCK_S * k
+    if skill == "place":
+        look = FETCH_LOOK_S if isinstance(p.get("where"), dict) and "near" in p["where"] else 0.0
+        if outcome in ("not_found", "out_of_reach", "nothing_held"):
+            return look
+        return (look + turn + FETCH_ABOVE_SPOT_S * k + (FETCH_LOOK_FIRST_S if look_first else 0.0) + FETCH_SET_S * k
+                + FETCH_RELEASE_S + FETCH_AFTER_OPEN_S + FETCH_VIA_S * k + FETCH_REST_S * k)
+    if skill == "hand_over":
+        if outcome == "nothing_held":
+            return 0.0
+        t = max(turn, 0.5 * turn + FETCH_REACH_S * k) + 0.3 + FETCH_OFFER_SETTLE_S
+        if outcome == "not_taken":
+            return t + p.get("wait_s", 3.0) + FETCH_TUCK_S * k
+        return (t + 0.5 * p.get("wait_s", 3.0) + FETCH_HANDOVER_OPEN_S + FETCH_HANDOVER_WAIT_S + FETCH_CLEAR_S * k
+                + FETCH_REST_S * k)
+    raise ValueError(skill)
+
+
 def nominal_duration(skill, params=None):
     """About how long a skill takes, in seconds, without stops."""
     p = validate(skill, params)
+    if skill in GENERAL:
+        return general_nominal(skill, p)
     if skill == "fetch_bottle":
         return fetch_nominal(p["pace"], p["wait_s"], p["look_first"])
     if skill == "grip_bottle":

@@ -21,7 +21,9 @@ from pathlib import Path
 
 import scservo_sdk as scs
 
+from . import desk
 from . import skills as S
+from .desk import Refuse
 
 SETUP = Path(__file__).resolve().parents[2] / "setup"
 
@@ -111,6 +113,10 @@ class RealArm:
         self._cur_max = dict(CUR_MAX)
         self._base_raised = False
         self.trace = collections.deque(maxlen=2000)   # every move, for the simulated-bus tests
+        # what pick left in the jaws: _held (the item, as the planner sees it plus the grip), its tier,
+        # the jaw position it closed at, and _carry (the arm is in the tucked carry pose with it)
+        self._held, self._held_tier, self._held_grip, self._carry = None, None, None, False
+        self._pan_range = (self.rng[1][0] + 30, self.rng[1][1] - 30)
 
         self._port_name, self._baud = port, baud
         self._p, self._h = port_handler, packet_handler
@@ -271,9 +277,11 @@ class RealArm:
             if t > end + 6:
                 raise RuntimeError("move took too long")
 
-    def _close_gripper(self, speed=300, give_up_s=None):
+    def _close_gripper(self, speed=300, give_up_s=None, miss_below=None):
         """Close until the jaws stop moving. Returns where they stopped when something is in
-        them, else None. grip_bottle raises after 5 s; fetch_bottle (give_up_s=5) just looks."""
+        them, else None. grip_bottle raises after 5 s; fetch_bottle (give_up_s=5) just looks.
+        miss_below: for a thin item (pick), jaws stopping at or under this count as a miss instead
+        of the usual 100 ticks above fully closed."""
         self.trace.append(("close",))
         self._wr(6, ACCEL, 10, 1)
         self._wr(6, SPEED, speed)
@@ -292,8 +300,9 @@ class RealArm:
                 raise RuntimeError("gripper did not settle")
         pos = self._rd(6, POSITION)
         self._joints[6] = pos
-        if pos - CLOSED > MISS_TICKS:
-            self._wr(6, GOAL, pos - 70)   # keep a light squeeze, the same force as before
+        got = pos - CLOSED > MISS_TICKS if miss_below is None else pos > miss_below
+        if got:
+            self._wr(6, GOAL, self._clamp(6, pos - 70))   # keep a light squeeze, the same force as before
             return pos
         return None
 
@@ -307,6 +316,8 @@ class RealArm:
 
     def _gripper_holding(self):
         g_pos, g_goal = self._rd(6, POSITION), self._rd(6, GOAL)
+        if self._held_grip is not None:     # a picked item, maybe a thin one: judged against its own grip
+            return g_pos > self._held_grip - 45 and g_goal < g_pos - 40
         return g_pos - CLOSED > MISS_TICKS and g_goal < g_pos - 40
 
     def _leg_back(self, dur, roll=None, acc=ACC):
@@ -379,7 +390,8 @@ class RealArm:
         self._torque = True
         if self._base_raised and all(abs(pos[i] - self.REST[i]) <= REST_TOL for i in range(1, 5)):
             self._restore_base_torque()   # a fetch that was stopped at rest left the base at full torque
-        if skill not in ("gesture", "fetch_bottle"):   # gestures run in time with the audio; fetch beeps before it moves
+        if skill not in ("gesture", "fetch_bottle", "pick", "point_at"):
+            # gestures run in time with the audio; fetch, pick and point_at look first and beep before they move
             self._beep(1200, 300)
 
     def _auto_rest(self):
@@ -407,17 +419,26 @@ class RealArm:
                 self._emit_cb = on_phase
                 auto = None
                 try:
-                    self._prepare(skill)
-                    if skill != "rest" and not self._at_rest_now():
-                        auto = self._auto_rest()
-                    res, detail = getattr(self, "_skill_" + skill)(**p)
+                    early = self._carry_gate(skill)
+                    if early is not None:
+                        return early
+                    if skill != "look":            # look never moves, so it needs no torque and no rest
+                        self._prepare(skill)
+                        keep = self._carry and skill in ("place", "hand_over")   # carrying: start from the carry pose
+                        if skill != "rest" and not keep and not self._at_rest_now():
+                            auto = self._auto_rest()
+                    out = getattr(self, "_skill_" + skill)(**p)
+                    res, detail = out[0], out[1]
+                    extra = out[2] if len(out) > 2 else {}
                     if auto is not None:
-                        return S.result(res, f"went back to rest first ({auto}); {detail}", auto_rest=True)
-                    return S.result(res, detail)
+                        return S.result(res, f"went back to rest first ({auto}); {detail}", auto_rest=True, **extra)
+                    return S.result(res, detail, **extra)
                 except _Stopped:
+                    self._carry = False            # out of the carry pose; the next skill rests first
                     self._hold_here()
                     return S.result("stopped", "stopped; holding where it is", **({"auto_rest": True} if auto else {}))
                 except Exception as e:
+                    self._carry = False
                     self._hold_here()
                     self._mute = False
                     self._emit("error")
@@ -451,7 +472,7 @@ class RealArm:
         j = self._joints
         at_rest = all(i in j and abs(j[i] - self.REST[i]) <= REST_TOL for i in range(1, 5)) if j else None
         return {"connected": self.connected, "busy": busy, "torque": self._torque, "at_rest": at_rest,
-                "holding": holding,
+                "holding": holding, "held": self._held if self._carry else None,
                 "joints": {self.names.get(i, str(i)): v for i, v in sorted(self._joints.items())},
                 "error": self.last_error}
 
@@ -554,8 +575,9 @@ class RealArm:
         at_rest = all(abs(pos[i] - self.REST[i]) <= REST_TOL for i in range(1, 5))
         detail = "at rest"
         if self._gripper_holding() and not at_rest:
-            self._put_down_here(1.0)
-            detail = "put the bottle down on the table where the arm was, then went to rest"
+            what = self._held["name"] if self._held else "bottle"
+            self._put_down_here(1.0, self._held_tier)
+            detail = f"put the {what} down on the table where the arm was, then went to rest"
             self._emit("returning")
             self._fetch_back_to_rest(1.0)
             holding = False
@@ -565,6 +587,9 @@ class RealArm:
             self._emit("returning")
             holding = self._leg_back(S.REST_LEG_S)
         self._restore_base_torque()
+        self._carry = False
+        if not holding:
+            self._forget_held()
         self._emit("done")
         return "done", "at rest; the gripper is still holding something" if holding else detail
 
@@ -616,17 +641,23 @@ class RealArm:
         self._fblend([(3, self.REST[3], 0, d), (2, self.REST[2], 0, (1 - LEAD) * d), (1, self.REST[1], 0, d),
                       (4, self.REST[4], 0, d), (6, CLOSED, 0.6 * d, 0.4 * d)], settle=False)
 
-    def _put_down_here(self, k):
+    def _put_down_here(self, k, tier=None):
         """The script's recovery when the turn cannot finish: hold, pull in to the tuck, stand the
-        bottle on the table where the arm is, let go and lift clear. The caller then folds back."""
+        bottle on the table where the arm is, let go and lift clear. The caller then folds back.
+        tier: an item picked with another tier's grips is set down with that tier's poses."""
         for i in (1, 2, 3, 4):
             self._wr(i, GOAL, self._clamp(i, self._rd(i, POSITION)))
-        tuck, mid = self.taught.tuck(), self.taught.mid["grasp"]
-        table = self.taught.table_lift_tucked()
+        if tier is None or tier.name == "tall":
+            tuck, mid = self.taught.tuck(), self.taught.mid["grasp"]
+            table = self.taught.table_lift_tucked()
+            opened = FETCH_OPEN
+        else:
+            tuck, mid, table, opened = tier.tuck(), tier.base_grasp(), tier.table_lift(), tier.open
         self._fblend(self._three(tuck, S.RECOVER_TUCK_S * k), settle=False)
         self._fblend([(3, mid["elbow"], 0, S.RECOVER_ALIGN_S * k), (4, mid["wrist_flex"], 0, S.RECOVER_ALIGN_S * k)], settle=False)
         self._fblend([(2, table, 0, S.RECOVER_TABLE_S * k)])
-        self._fblend([(6, FETCH_OPEN, 0, S.FETCH_RELEASE_S)], settle=False)
+        self._fblend([(6, opened, 0, S.FETCH_RELEASE_S)], settle=False)
+        self._forget_held()
         self._emit("put_back")
         self._wait(S.FETCH_AFTER_OPEN_S)
         self._fblend([(2, table - 220, 0, S.RECOVER_CLEAR_S * k)], settle=False)
@@ -791,14 +822,15 @@ class RealArm:
         close in by that much. Seeing them well inside the grip position means it is gone."""
         return self._rd(6, POSITION) > grip - 45
 
-    def _lost_the_bottle(self, k, plan, when):
+    def _lost_the_bottle(self, k, plan, when, what="the bottle"):
         """The bottle slipped out. Say so and go home; do not carry on and offer an empty hand."""
+        self._forget_held()
         self._emit("missed")
         self._emit("returning")
         self._fetch_back_to_rest(k)
         self._restore_base_torque()
         self._emit("done")
-        return "missed", f"had the bottle, then lost it {when}. {plan['note']}"
+        return "missed", f"had {what}, then lost it {when}. {plan['note']}"
 
     def _skill_fetch_bottle(self, pace, wait_s, look_first):
         k = S.fetch_stretch(pace)
@@ -900,3 +932,287 @@ class RealArm:
         self._restore_base_torque()
         self._emit("done")
         return res, detail
+
+    # The general building blocks: look, point_at, pick, place, hand_over (backend/arm/README.md).
+    # They reuse the fetch_bottle legs, numbers and pace stretch; only the poses come from the
+    # taught grips of the item's tier (backend/vision/table.py load_tiers).
+    CARRY_OK = ("look", "place", "hand_over", "rest", "gesture")
+
+    def _forget_held(self):
+        self._held, self._held_tier, self._held_grip, self._carry = None, None, None, False
+
+    def _carry_gate(self, skill):
+        """Before anything moves: place and hand_over need something picked up, and while the arm
+        carries an item only look, place, hand_over and rest run (a gesture is skipped)."""
+        carrying = self._carry and self._held is not None
+        if skill in ("place", "hand_over") and not carrying:
+            return S.result("nothing_held", "I am not holding anything I picked up")
+        if carrying and skill == "gesture":
+            return S.result("done", f"gesture skipped while holding the {self._held['name']}", skipped=True)
+        if carrying and skill not in self.CARRY_OK:
+            return S.result("hands_full", f"I am holding the {self._held['name']}; place it or hand it over first")
+        return None
+
+    def _tiers(self):
+        from backend.vision.table import load_tiers
+        return load_tiers(self.setup_dir)     # read each time, so a grip taught a minute ago counts
+
+    def _scene(self, name=None):
+        try:
+            s = self._call_vision(lambda: self.vision.scene(name=name, stop=self._stop))
+        except _Stopped:
+            raise
+        except Exception as e:
+            raise Refuse("not_found", f"the overhead look failed ({type(e).__name__}: {str(e)[:120]})")
+        if s is None:
+            raise Refuse("no_picture", "the overhead camera gives no picture")
+        return s
+
+    def _find_target(self, target):
+        """(item, scene) for a spoken name, or for a desk position (the item nearest it)."""
+        if not target:
+            raise Refuse("not_found", "no target was given")
+        if isinstance(target, dict):
+            s = self._scene()
+            item = desk.nearest(s["items"], target["x_cm"], target["y_cm"])
+        else:
+            s = self._scene(name=target)
+            item = s.get("match")
+        if item is None:
+            raise Refuse("not_found", f"I cannot see {desk.label(target)} on the desk")
+        return item, s
+
+    def _skill_look(self, target):
+        self._emit("start")
+        try:
+            s = self._scene(name=target if isinstance(target, str) else None)
+        except Refuse as r:
+            self._emit("done")
+            return r.result, r.detail, r.extra
+        from backend.vision.scene import public
+        self._emit("seen")
+        self._emit("done")
+        items = [public(i) for i in s["items"]]
+        names = ", ".join(i["name"] for i in items) or "nothing"
+        extra = {"scene": items, "person": s.get("person")}
+        detail = f"I can see {len(items)} things: {names}" + ("" if s.get("person") else "; no person seen")
+        if isinstance(target, str):
+            extra["match"] = public(s.get("match"))
+            detail += f"; {target!r} is the {s['match']['name']}" if s.get("match") else f"; nothing fits {target!r}"
+        return "done", detail, extra
+
+    def _skill_point_at(self, target, pace):
+        from backend.vision.scene import public
+        k = S.fetch_stretch(pace)
+        self._emit("start")
+        try:
+            if isinstance(target, dict):
+                item = {"name": desk.label(target)[4:], **self.table.point(target["x_cm"], target["y_cm"])}
+            else:
+                item, _ = self._find_target(target)
+            self._emit("seen")
+            tiers = [t for t in self._tiers().values() if t.available]
+            lo, hi = min(t.min_r for t in tiers), max(t.max_r for t in tiers)
+            problem = desk.reach_problem(item, lo, hi, self._pan_range, what=f"the {item['name']}")
+            if problem:
+                raise Refuse("out_of_reach", problem)
+        except Refuse as r:
+            self._emit("done")
+            return r.result, r.detail, r.extra
+        via, _, _ = self._tiers()["tall"].posture(item["dist_cm"])
+        pose = {1: int(item["pan"]), 2: via["lift"] - S.POINT_AT_RAISE, 3: via["elbow"], 4: via["wrist_flex"]}
+        self._beep(1200, 300)
+        t_out = S.FETCH_OUT_S * k
+        self._fblend([(3, pose[3], 0, t_out), (2, pose[2], LEAD * t_out, (1 - LEAD) * t_out), (1, pose[1], 0, t_out),
+                      (4, pose[4], 0, t_out)], settle=False)
+        self._emit("at_target")
+        self._wait(S.POINT_AT_HOLD_S)
+        self._emit("returning")
+        self._fetch_back_to_rest(k)
+        self._emit("done")
+        return "done", f"pointed at the {item['name']}, {item['dist_cm']:.0f} cm away", {"target": public(item)}
+
+    def _skill_pick(self, target, pace, approach, lift_cm_style):
+        from backend.vision.scene import public
+        k = S.fetch_stretch(pace)
+        self._emit("start")
+        try:
+            item, s = self._find_target(target)
+            self._emit("seen")
+            plan = desk.pick_plan(item, self._tiers(), self._pan_range)
+        except Refuse as r:
+            self._emit("done")
+            return r.result, r.detail, r.extra
+        tier, via, grasp, pan, roll = plan["tier"], plan["via"], plan["grasp"], plan["pan"], plan["roll"]
+        name = item["name"]
+        note = (f"the {name} at {plan['dist_cm']:.1f} cm, pan {pan}, {tier.name} grip blended {plan['t']:.2f}"
+                + (f", wrist roll {roll} for its angle {item['axis_deg']:.0f} deg" if roll is not None else ""))
+        roll_home = self._rd(5, POSITION)
+        self._raise_base_torque()
+        self._beep(1200, 300)
+        t_out = S.FETCH_OUT_S * k
+        out = [(3, via["elbow"], 0, t_out), (2, via["lift"], LEAD * t_out, (1 - LEAD) * t_out), (1, pan, 0, t_out),
+               (4, via["wrist_flex"], 0, t_out), (6, tier.open, 0, min(S.FETCH_OPEN_S, t_out))]
+        if roll is not None:
+            out.append((5, roll, 0, t_out))
+        self._fblend(out, settle=False)
+        if approach == "look_first":
+            self._wait(S.FETCH_LOOK_FIRST_S)
+        self._fblend(self._three(grasp, S.FETCH_APPROACH_S * k))
+        self._emit("at_target")
+        self._held_tier = tier
+        miss_below = None if tier.closed is None else max(CLOSED + 15, tier.closed - 50)
+        grip = self._close_gripper(speed=FETCH_CLOSE_SPEED, give_up_s=5.0, miss_below=miss_below)
+        if grip is None:
+            self._forget_held()
+            self._emit("missed")
+            self._fblend([(6, tier.open, 0, S.FETCH_RELEASE_S)], settle=False)
+            back = self._three(via, S.FETCH_VIA_S * k) + ([(5, roll_home, 0, S.FETCH_VIA_S * k)] if roll is not None else [])
+            self._fblend(back, settle=False)
+            self._emit("returning")
+            self._fetch_back_to_rest(k)
+            self._restore_base_torque()
+            self._emit("done")
+            return "missed", f"the gripper closed on nothing. {note}"
+        self._held_grip = grip
+        self._emit("gripped")
+        carry = tier.carry(lift_cm_style)
+        self._fblend(self._three(carry, S.FETCH_TUCK_S * k), settle=False)
+        if not self._still_holding(grip):
+            return self._lost_the_bottle(k, {"note": note}, "during the lift", what=f"the {name}")
+        self._emit("lifted")
+        self._held = {**public(item), "grip": grip, "rim_offset_cm": item.get("grip_at", {}).get("rim_offset_cm"),
+                      "carry": carry, "roll_home": roll_home if roll is not None else None,
+                      "person": s.get("person"), "seen_at": self._now()}
+        self._carry = True
+        self._emit("done")
+        return "holding", f"holding the {name}, gripped at {grip}. {note}", {"held": public(item)}
+
+    def _slipped(self, k, what):
+        """The carried item is no longer in the jaws: go home and say so."""
+        self._forget_held()
+        self._emit("returning")
+        self._fetch_back_to_rest(k)
+        self._restore_base_torque()
+        self._emit("done")
+        return "nothing_held", f"the {what} slipped out of the jaws; went back to rest"
+
+    def _turn_failed(self, k, e, tier, what):
+        at = self._rd(1, POSITION)
+        self._put_down_here(k, tier)
+        self._emit("returning")
+        self._fetch_back_to_rest(k)
+        self._restore_base_torque()
+        self._emit("done")
+        return "turn_failed", f"could not finish the turn ({e}) at pan {at}; the {what} is on the table where the arm stopped"
+
+    def _skill_place(self, where, pace, approach):
+        k = S.fetch_stretch(pace)
+        H, tier = self._held, self._held_tier
+        name = H["name"]
+        self._emit("start")
+        if not self._still_holding(H["grip"]):
+            return self._slipped(k, name)
+        try:
+            def look(n):
+                s = self._scene(name=n)
+                return s.get("match")
+            x, y, words = desk.place_centre(where, H, look)
+            spot = desk.jaws_for_centre(x, y, H, self.table.point)
+            problem = desk.reach_problem(spot, tier.min_r, tier.max_r, self._pan_range, what="that spot")
+            if problem:
+                raise Refuse("out_of_reach", f"{problem}; still holding the {name}")
+        except Refuse as r:
+            self._emit("done")
+            return r.result, r.detail, r.extra
+        self._emit("seen")
+        via, grasp, _ = tier.posture(spot["dist_cm"])
+        pan = int(spot["pan"])
+        turn = S.fetch_turn_s(self._rd(1, POSITION), pan, pace)
+        self._emit("carrying")
+        try:
+            self._fblend([(1, pan, 0, turn)], settle=False)      # loaded turn in the carry pose, as fetch's put back
+        except RuntimeError as e:
+            return self._turn_failed(k, e, tier, name)
+        self._fblend([(2, grasp["lift"] - LIFT_UP, 0, S.FETCH_ABOVE_SPOT_S * k), (3, grasp["elbow"], 0, S.FETCH_ABOVE_SPOT_S * k),
+                      (4, grasp["wrist_flex"], 0, S.FETCH_ABOVE_SPOT_S * k)], settle=False)
+        if approach == "look_first":
+            self._wait(S.FETCH_LOOK_FIRST_S)
+        self._fblend([(2, grasp["lift"], 0, S.FETCH_SET_S * k)])
+        self._emit("at_target")
+        self._fblend([(6, tier.open, 0, S.FETCH_RELEASE_S)], settle=False)
+        roll_home = H.get("roll_home")
+        self._forget_held()
+        self._emit("put_back")
+        self._wait(S.FETCH_AFTER_OPEN_S)
+        clear = self._three(via, S.FETCH_VIA_S * k) + ([(5, roll_home, 0, S.FETCH_VIA_S * k)] if roll_home is not None else [])
+        self._fblend(clear, settle=False)
+        self._emit("returning")
+        self._fetch_back_to_rest(k)
+        self._restore_base_torque()
+        self._emit("done")
+        return "placed", f"put the {name} down {words}, {spot['dist_cm']:.0f} cm from the arm", \
+            {"placed_at": {"x_cm": round(x, 1), "y_cm": round(y, 1)}}
+
+    def _skill_hand_over(self, wait_s, pace):
+        k = S.fetch_stretch(pace)
+        H, tier = self._held, self._held_tier
+        name, grip = H["name"], H["grip"]
+        self._emit("start")
+        if not self._still_holding(grip):
+            return self._slipped(k, name)
+        person, pnote = H.get("person"), "the person seen when it was picked up"
+        if person is None or self._now() - H.get("seen_at", 0) > 20:
+            try:
+                person, pnote = self._scene().get("person"), "the person seen just now"
+            except Refuse:
+                person = None
+        if person is not None:
+            pan_p = person["pan"]
+        else:
+            pan_p, pnote = self.table.pan_for_bearing(1.2), "person not seen, went to the right"
+        pan_p = int(max(PERSON_PAN[0], min(PERSON_PAN[1], pan_p)))
+        self._emit("seen")
+        far = self.taught.far_grasp()          # held out at full reach: fetch_bottle's offer pose
+        turn = S.fetch_turn_s(self._rd(1, POSITION), pan_p, pace)
+        try:
+            watcher = self.vision.hand_watcher()
+        except Exception:
+            watcher = None
+        try:
+            self._check_stop()
+            self._emit("carrying")
+            reach = S.FETCH_REACH_S * k
+            try:
+                self._fblend([(1, pan_p, 0, turn), (2, far["lift"] - 120, 0.5 * turn, reach),
+                              (3, far["elbow"], 0.5 * turn, reach), (4, far["wrist_flex"], 0.5 * turn, reach)], settle=False)
+            except RuntimeError as e:
+                return self._turn_failed(k, e, tier, name)
+            if not self._still_holding(grip):
+                return self._lost_the_bottle(k, {"note": f"held out at pan {pan_p}"}, "while carrying it", what=f"the {name}")
+            self._emit("offering")
+            self._beep(900, 150)
+            self._beep(900, 150)
+            took = self._wait_for_take(wait_s, watcher)
+        finally:
+            if watcher is not None:
+                watcher.stop()
+        checks = getattr(watcher, "checks", 0) if watcher is not None else 0
+        if took:
+            self._fblend([(6, tier.open, 0, S.FETCH_HANDOVER_OPEN_S)], settle=False)
+            self._forget_held()
+            self._emit("handed_over")
+            self._wait(S.FETCH_HANDOVER_WAIT_S)
+            self._fblend([(2, far["lift"] - 300, 0, S.FETCH_CLEAR_S * k)], settle=False)
+            self._emit("returning")
+            self._fetch_back_to_rest(k)
+            self._restore_base_torque()
+            self._emit("done")
+            return "handed_over", f"handed over the {name} ({took}, {checks} hand checks) at pan {pan_p} ({pnote})"
+        self._fblend(self._three(H["carry"], S.FETCH_TUCK_S * k), settle=False)
+        if not self._still_holding(grip):
+            return self._slipped(k, name)
+        self._carry = True
+        self._emit("done")
+        return "not_taken", (f"nobody took the {name} in {wait_s:g} s ({checks} hand checks); still holding it "
+                             f"in the carry pose at pan {pan_p} ({pnote})")

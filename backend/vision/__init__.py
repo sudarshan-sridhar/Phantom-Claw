@@ -5,18 +5,21 @@
     seen = v.look_overhead()          # None when the overhead phone gives no picture
     look = v.wrist_look(pan=2009)     # one upright wrist frame asked for boxes
     w = v.hand_watcher()              # thread that watches for a hand while offering
+    s = v.scene()                     # everything on the desk, one picture, one Gemini call
+    it = v.find("something to drink") # the one item that best fits a spoken name
 
-The arm only uses these four calls, so tests can pass any object with the same methods.
+The arm only uses these calls, so tests can pass any object with the same methods.
 """
 import math
 from pathlib import Path
 
 from . import cameras, gemini
 from .gemini import GeminiError, parse_box, parse_boxes
-from .table import JAW_OFFSET, TableMap, Taught
+from .scene import match_name, parse_scene, scene_prompt, tier_for
+from .table import JAW_OFFSET, GripTier, TableMap, Taught, load_tiers
 
-__all__ = ["Vision", "TableMap", "Taught", "parse_box", "parse_boxes", "GeminiError", "JAW_OFFSET",
-           "wrist_pan_for", "WRIST"]
+__all__ = ["Vision", "TableMap", "Taught", "GripTier", "load_tiers", "parse_box", "parse_boxes", "GeminiError",
+           "JAW_OFFSET", "wrist_pan_for", "WRIST", "parse_scene", "scene_prompt", "match_name", "tier_for"]
 
 OVERHEAD_PROMPT = (
     "This is a photo of a desk from above. Find (1) the clear plastic water bottle standing on the desk and "
@@ -80,6 +83,28 @@ class Vision:
         if img is None:
             return None
         return self.locate(img)
+
+    def scene(self, name=None, stop=None, img=None):
+        """Everything on the desk from one overhead picture and one Gemini call:
+        {"items": [...], "person": {...} or None, "match": item or None, "markers_used": n}, or None
+        when the overhead camera gives no picture. With a name, Gemini also picks the item that
+        best fits it ("match"). See backend/vision/scene.py for the fields and the desk frame."""
+        if img is None:
+            img = cameras.grab_overhead(self.overhead_index, stop=stop)
+            if img is None:
+                return None
+        from . import markers
+        self.markers_used = markers.refresh(self.table, img)
+        raw = gemini.ask_json(img, scene_prompt(name), size=(960, 540))
+        out = parse_scene(raw, self.table, want=name)
+        out["markers_used"] = self.markers_used
+        self.last_scene = out
+        return out
+
+    def find(self, name, stop=None, img=None):
+        """The one item that best matches a spoken name ("the mug", "something to drink"), or None."""
+        s = self.scene(name=name, stop=stop, img=img)
+        return None if s is None else s["match"]
 
     def wrist_look(self, pan=None):
         """Boxes for the bottle and the person in one upright wrist frame:

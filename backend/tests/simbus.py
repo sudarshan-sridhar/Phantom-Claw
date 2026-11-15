@@ -238,12 +238,38 @@ class FakeVision:
         self.watchers.append(w)
         return w
 
+    # the general skills: a pretend desk of any items, as Vision.scene() would describe it
+    scene_items = None       # list of {"name", "x_cm", "y_cm", "tier", "graspable", "axis_deg", "width_cm"}
+    scene_asks = None
 
-def make_real(grip_ok=True, start=None, quiet=True, **vision):
+    def scene(self, name=None, stop=None):
+        from backend.vision.scene import grip_point, match_name
+        from backend.vision.table import TableMap
+        if self.scene_asks is None:
+            self.scene_asks = []
+        self.scene_asks.append(name)
+        if not self.overhead:
+            return None
+        tm = TableMap()
+        items = []
+        for e in self.scene_items or []:
+            it = {"name": e["name"], "box": None, "tier": e.get("tier", "tall"), "tier_from": "name",
+                  "graspable": e.get("graspable", True), "axis_deg": e.get("axis_deg"), "width_cm": e.get("width_cm")}
+            it.update(tm.point(e["x_cm"], e["y_cm"]))
+            it["grip_at"] = grip_point(it, tm)
+            items.append(it)
+        person = None
+        if self.person_pan is not None:
+            person = {"box": None, "x_cm": 40.0, "y_cm": 20.0, "bearing": 60.0, "pan": self.person_pan}
+        return {"items": items, "person": person, "match": match_name(items, name) if name else None}
+
+
+def make_real(grip_ok=True, start=None, quiet=True, setup_dir=None, scene_items=None, **vision):
     """A RealArm on a SimBus with FakeVision. Returns (arm, bus, vision, clock)."""
     from backend.arm.real import RealArm
     clock = VClock()
     bus = SimBus(clock, start=start, grip_ok=grip_ok)
     vis = FakeVision(clock, bus, **vision)
-    arm = RealArm(port_handler=bus, packet_handler=bus, vision=vis, clock=clock, quiet=quiet)
+    vis.scene_items = scene_items
+    arm = RealArm(port_handler=bus, packet_handler=bus, vision=vis, clock=clock, quiet=quiet, setup_dir=setup_dir)
     return arm, bus, vis, clock

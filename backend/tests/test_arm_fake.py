@@ -127,7 +127,8 @@ def test_validate_clamps():
     assert validate("rest", None) == {}
     assert validate("gesture", {"style": " King ", "seconds": 30}) == {"style": "king", "seconds": 10.0}
     assert validate("gesture", {"style": "zeldris", "seconds": 0.2}) == {"style": "gowther", "seconds": 1.5}
-    assert set(SKILLS) == {"grip_bottle", "fetch_bottle", "point", "half_reach", "wave", "rest", "gesture"}
+    assert set(SKILLS) == {"grip_bottle", "fetch_bottle", "point", "half_reach", "wave", "rest", "gesture",
+                           "look", "point_at", "pick", "place", "hand_over"}
     assert validate("fetch_bottle", {"pace": 3, "wait_s": 30, "look_first": "yes"}) == \
         {"pace": 1.0, "wait_s": 6.0, "look_first": True}
     assert validate("fetch_bottle", {"wait_s": 0.5}) == {"pace": 0.5, "wait_s": 2.0, "look_first": False}
