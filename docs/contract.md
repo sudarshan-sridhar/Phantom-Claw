@@ -21,9 +21,9 @@ third-hand/
 
 Python to use for everything: `C:\Users\sudar\.conda\envs\lerobot\python.exe`. Install packages into that environment with its own pip. Do not create another environment.
 
-Keys are read from `third-hand/.env`: `OPENAI_API_KEY`, `GEMINI_API_KEY`, `ELEVENLABS_API_KEY`. All three work. `ANTHROPIC_API_KEY` is empty.
+Keys are read from `third-hand/.env`: `OPENAI_API_KEY`, `GEMINI_API_KEY`, `ELEVENLABS_API_KEY`, `ANTHROPIC_API_KEY`. All four work.
 
-Models known to work: OpenAI `gpt-4o-mini`. Gemini `gemini-3.5-flash-lite` (the larger Gemini flash models were overloaded). Model names live in one config dict so they can be changed in one place.
+Models known to work: OpenAI `gpt-4o-mini`. Gemini `gemini-3.5-flash-lite` (the larger Gemini flash models were overloaded). Anthropic `claude-haiku-5-5`. Model names live in one config dict so they can be changed in one place.
 
 ## The cast
 
@@ -33,8 +33,8 @@ Models known to work: OpenAI `gpt-4o-mini`. Gemini `gemini-3.5-flash-lite` (the 
 | elizabeth | Elizabeth | caring | gemini | elizabeth |
 | ban | Ban | greedy and eager | gemini | ban |
 | king | King | lazy | openai | king |
-| gowther | Gowther | neutral | openai (stands in for Claude) | gowther |
-| merlin | Merlin | the Conductor | openai (stands in for Claude) | merlin |
+| gowther | Gowther | neutral | anthropic (falls through to openai) | gowther |
+| merlin | Merlin | the Conductor | anthropic (falls through to openai) | merlin |
 
 Voice ids are in `setup/cast_voices.json` as `{id: {"voice": name, "voice_id": id}}`.
 
@@ -44,7 +44,7 @@ Character notes (lines are short, never longer than the action they go with):
 - Ban: wants every job, quick, cocky, does a little more than asked.
 - King: does the least that counts. Short answers. Sighs.
 - Gowther: flat, literal, no feelings. Reports the result and nothing else.
-- Merlin: calm, a little amused. Speaks only to hand a job over or to settle an argument.
+- Merlin: calm, a little amused. Speaks to hand a job over, to settle an argument, or when spoken to directly.
 
 ## The plan (what an agent returns)
 
@@ -112,15 +112,44 @@ Spoken lines: always contractions ("I'm", "it's", "don't"); the check applies co
 
 ### Laptop tools
 
+All tools live in one registry, `backend/tools` (`TOOLS`). Merlin's check knows only those names and cleans every field.
+
 | tool | Fields | Effect |
 |---|---|---|
 | `note` | `text` | Append a line to `backend/notes.md` and send a `note` event |
 | `todo` | `text` | Same, as a to-do item |
-| `timer` | `seconds`, `label` | Start a timer; when it ends send a `timer_done` event |
+| `timer` | `seconds` (1 to 3600), `label` | Start a timer; when it ends send a `timer_done` event |
 | `open_url` | `url` (http or https only) | Open in the default browser |
-| `lookup` | `query` | Ask the agent's own LLM for a two sentence answer; no web access yet |
+| `lookup` | `query` | Ask the agent's own LLM for a short answer in that character's voice; no web access |
+| `open_app` | `name` | Open an installed program by spoken name: Start menu shortcuts (user and all-users, searched recursively, fuzzy match, uninstallers and setup entries skipped) plus a table of common names (chrome, edge, notepad, calculator, file explorer, vs code, spotify, discord, terminal, settings, word, excel, powerpoint, paint, camera, snipping tool, and a few sites). Launched with `os.startfile`. No match: says so, never guesses a path |
+| `open_folder` | `name` | Downloads, Documents, Desktop, Pictures, Videos, Music, Screenshots, or the project folder |
+| `open_file` | `query` | The newest file in Downloads, Documents or Desktop (3 levels deep) whose name has every word; opened with its usual program. Programs, scripts, installers and shortcuts are never opened |
+| `web_search` | `query` | Open a web search in the default browser |
+| `youtube` | `query` | Open a YouTube search |
+| `play_music` | `query` | Open Spotify on a search (`spotify:search:`), or the web player if the app isn't installed |
+| `media` | `action`: `play_pause`, `next`, `previous`, `volume_up`, `volume_down`, `mute` | Press the media key (volume moves about 10 percent) |
+| `type_text` | `text` (at most 600 characters) | Type into the window in front, like dictation. Text only: line breaks become spaces, no key combinations, nothing that mentions a password |
+| `read_screen` | `question` | One screenshot, shrunk in memory, sent to Gemini (`gemini-3.5-flash-lite`, key in the `x-goog-api-key` header) with the question; nothing is saved |
+| `clipboard` | `question` | Read the clipboard text and answer about it or sum it up (same Gemini path, text only) |
+| `tell` | `what`: `time`, `date`, `battery`, `window` | Read the clock, the battery, or the title of the window in front |
+| `show_desktop` | none | Win+D |
+| `screenshot` | none | Save a new PNG in `Pictures\Screenshots` (never overwrites) and say where |
 
-No tool sends, deletes or pays for anything.
+Gated tools: `read_screen`, `clipboard` and `type_text` are dropped by the check unless the request is plainly about the screen, what was copied, or typing.
+
+Dry run: `tools.set_dry_run(True)` or `PHANTOM_DRY_TOOLS=1`. Each tool works out what it would do (which shortcut, folder, file or address) and reports it as `{"ok": true, "dry": true, "would": "..."}` without opening, typing, pressing or capturing anything. `python -m backend.agents.demo "open notepad" --dry-tools` uses it.
+
+Results that need saying: `lookup`, `read_screen`, `clipboard`, `tell`, a program or file that isn't there, a screenshot's place, a refusal. After the first line (which only says "hang on" for answer tools), the character speaks one more short line with the result as a second `say` event. Answers from `lookup`, `read_screen` and `clipboard` come back already in the character's voice (the tool's own LLM call is told who is talking); simple facts use a fixed line per character, no extra LLM call. Answer tools start while the first line is being made and played. A second line follows the same rules as the first, may run to 220 characters, and at most two follow per request. A missing extra (Ban's bonus app) is not announced when the main thing opened.
+
+How each character uses the laptop (prompts, with the caps enforced by the check):
+- Escanor: does every laptop job, even at night; a trivial one with a remark that it was beneath him. Research always gets `lookup` plus one page (the check adds whichever he forgot). At most 2 things opened, 1 extra.
+- Elizabeth: says back what she understood in a few words. At most one extra, and only a gentle one (`timer`, `note`, `todo`). At most 2 opened.
+- Ban: the thing plus one related thing. His extra must be something opened. At most 3 opened.
+- King: exactly one tool call, the shortest route.
+- Gowther: exactly what was asked; extras are dropped.
+- Everyone: at most 3 or 4 calls in total, duplicates dropped.
+
+Never, whoever asks: delete, move, rename or overwrite files; send messages or email; pay or buy; type or read passwords; shut down, restart, sign out or lock the machine; change system or security settings; install anything. `backend/tools/safety.py` spots these in the request (a note or reminder about them, "remind me to pay rent", and a how-to question, "how do I delete a branch?", are fine; passwords are refused in every form). The check then drops every tool and the arm, and if the line doesn't already say no it is replaced by that character's refusal line. Only `notes.md` is ever written to (appended), plus new screenshot files.
 
 ## Skill server interface (backend/arm)
 
@@ -144,7 +173,7 @@ class Arm(Protocol):
 
 ## HTTP and WebSocket API (backend/server.py, 127.0.0.1:8765)
 
-- `POST /api/request` body `{"text": str, "agent": str | null}`. Runs the whole pipeline. Returns `{"agent", "say", "plan", "audio_url", "arm_result"}`.
+- `POST /api/request` body `{"text": str, "agent": str | null}`. Runs the whole pipeline. Returns `{"agent", "say", "plan", "audio_url", "arm_result"}`, plus `tools` (each tool's result), `followups` (the result lines), `group` (chip-in lines) and `routed` (`{"why", "by"}`). When Merlin answers herself, `agent` is `merlin`.
 - `POST /api/stt` multipart audio file. Returns `{"text"}` (ElevenLabs speech to text).
 - `POST /api/stop`. Stops the arm.
 - `GET /api/cast`. Returns the cast with names, egos, colours and current state.
@@ -165,10 +194,19 @@ class Arm(Protocol):
 
 Pipeline for one request:
 1. Send `request`.
-2. If the text names an agent (tolerate near misses such as "Gauther", "Escanoor"), that agent takes it and Merlin says nothing. Otherwise Merlin picks by role and says one short line. About one request in four, when no agent is named, two agents each say one line wanting or dodging the job before Merlin decides.
+2. If the text names an agent (tolerate near misses such as "Gauther", "Escanoor"), that agent takes it and Merlin says nothing. "Merlin, ask Ban to ..." goes to Ban with a line from Merlin. Spoken to directly ("Merlin, how are you?"), Merlin's own LLM either answers in one line (a `merlin` event with `chosen: null`, no agent speaks) or hands the job on. Otherwise Merlin picks by the kind of job and says one short line:
+   - research, facts and hard questions: Escanor
+   - timers, reminders, breaks, the owner's wellbeing: Elizabeth
+   - opening apps, files, folders, pages and music, media keys, setting things up: Ban
+   - notes, to-dos, dictation: King
+   - the screen, the clipboard, exact facts about the machine, code and commands: Gowther
+   - the bottle: whoever is named, otherwise Ban
+   Unnamed requests are routed by Claude (`claude-haiku-5-5` through `providers.get_json("anthropic", ...)`, a small JSON answer `{"agent", "kind", "why"}`, 3 s cap). The answer is checked against the cast; on a failure, a timeout or a bad name the fixed rules in `merlin.job_kind` decide (an `error` event with `where: "route"` says so). A request asked again goes back to whoever dodged it, and the bottle goes to Ban, without asking Claude. Safety refusals are decided in code, never by the model.
+   "Everyone" or "all of you": the one picked does the job and one or two others chip in a brief line each (no tools, no arm).
+   When the kind of job isn't clear, about one request in four, two agents each say one line wanting or dodging the job before Merlin decides.
 3. The chosen agent's LLM returns the plan. If its provider fails or takes more than 8 s, fall through: gemini to openai, openai to gemini.
 4. Merlin's check validates the plan against this file and clamps the numbers. A bad plan is replaced by a safe one: the agent says it cannot do that, no arm skill.
-5. Speech is generated (cached on disk by voice id and text), `say` is sent, laptop tools run, then the arm skill runs with `arm` events.
+5. Speech is generated (cached on disk by voice id and text), `say` is sent, laptop tools run (the ones that answer start while the line is being made), the line with the result is sent as another `say`, any chip-in lines follow, then the arm skill runs with `arm` events.
 6. Agent states are sent throughout. Everyone returns to `idle` at the end.
 
 ## Avatar colours

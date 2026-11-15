@@ -32,9 +32,10 @@ def test_names(text, expected):
 
 
 def test_role_choice():
-    assert merlin.choose_by_role("what is a servo?") == "gowther"
+    # research and questions go to Escanor now, timers to Elizabeth (the routing by kind of job)
+    assert merlin.choose_by_role("what is a servo?") == "escanor"
     assert merlin.choose_by_role("remind me to buy solder") == "elizabeth"
-    assert merlin.choose_by_role("set a timer for 5 minutes") == "king"
+    assert merlin.choose_by_role("set a timer for 5 minutes") == "elizabeth"
 
 
 def test_escanor_clock_and_politeness():

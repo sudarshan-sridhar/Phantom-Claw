@@ -20,9 +20,11 @@ def _num(name: str, default: float) -> float:
 
 SERVER = os.environ.get("PHANTOM_SERVER", "http://127.0.0.1:8765").rstrip("/")
 
-# The hall is loud, so by default an utterance has to name somebody before it goes anywhere.
-# Turn this off and unnamed utterances go to the server with agent null, so Merlin picks.
-REQUIRE_NAME = _flag("LISTEN_REQUIRE_NAME", True)
+# By default an utterance doesn't need a name: an unnamed one goes to the server with agent null
+# and Merlin picks who takes it by the kind of job. Chatter that isn't a request is dropped first
+# (see looks_like_request). In a noisy room set LISTEN_REQUIRE_NAME=1 (or --require-name) so only
+# utterances that name somebody go anywhere.
+REQUIRE_NAME = _flag("LISTEN_REQUIRE_NAME", False)
 
 # Speech model. Empty means small.en on the GPU and base.en on the CPU.
 MODEL = os.environ.get("LISTEN_MODEL", "").strip()

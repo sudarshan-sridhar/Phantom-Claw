@@ -1,6 +1,6 @@
 # Voice control (backend/listen)
 
-A separate process that owns the microphone. It sits asleep until it hears "Phantom Claw, start" (or you tap Ctrl+Shift), then sends anything that names a character to the server. "Phantom Claw, stop" (or "sleep", or Ctrl+Shift again) puts it back to sleep.
+A separate process that owns the microphone. It sits asleep until it hears "Phantom Claw, start" (or you tap Ctrl+Shift), then sends what you say to the server. You don't have to use a name: an unnamed request goes to Merlin, who picks who takes it by the kind of job. "Phantom Claw, stop" (or "sleep", or Ctrl+Shift again) puts it back to sleep.
 
 ## Run it
 
@@ -14,7 +14,8 @@ Useful flags:
 
 ```
 --awake                 start awake
---no-require-name       unnamed requests go to the server with agent null, so Merlin picks
+--require-name          only send utterances that name somebody (for a noisy room)
+--no-require-name       the default: unnamed requests go to the server with agent null, so Merlin picks
 --stt cuda|cpu|server   force a speech path (default: try GPU, then CPU, then the server)
 --model base.en         a different faster-whisper model
 --mic 3                 a microphone by index or name (default: the built-in Microphone Array, else the system default)
@@ -24,7 +25,7 @@ Useful flags:
 --file reply:b.wav      wait until a character is talking, then play b.wav over them (the self-hearing check)
 ```
 
-Settings can also come from the environment: `LISTEN_REQUIRE_NAME` (default 1), `LISTEN_DEVICE`, `LISTEN_MODEL`, `LISTEN_MIC`, `LISTEN_VAD` (0 to 3, default 2), `LISTEN_ENERGY_MIN` (an extra loudness floor for a noisy hall, int16 RMS, default off), `LISTEN_SILENCE_MS` (450), `LISTEN_MIN_MS` (300), `LISTEN_MUTE_TAIL` (0.4), `PHANTOM_SERVER` (http://127.0.0.1:8765).
+Settings can also come from the environment: `LISTEN_REQUIRE_NAME` (default 0; set 1 for a noisy room), `LISTEN_DEVICE`, `LISTEN_MODEL`, `LISTEN_MIC`, `LISTEN_VAD` (0 to 3, default 2), `LISTEN_ENERGY_MIN` (an extra loudness floor for a noisy hall, int16 RMS, default off), `LISTEN_SILENCE_MS` (450), `LISTEN_MIN_MS` (300), `LISTEN_MUTE_TAIL` (0.4), `PHANTOM_SERVER` (http://127.0.0.1:8765).
 
 Stop it with Ctrl+C, or just end the process. It holds no files and no state of its own, so killing it is safe.
 
@@ -33,7 +34,7 @@ Stop it with Ctrl+C, or just end the process. It holds no files and no state of 
 1. 16 kHz mono audio from sounddevice in 30 ms frames. webrtcvad decides which frames are voice. Three voiced frames out of five start an utterance, 450 ms of quiet ends it, anything with less than 300 ms of voice is dropped, and nothing runs longer than 12 s.
 2. Each utterance goes to faster-whisper small.en on the GPU (float16). The CUDA DLLs come from the `nvidia-cublas-cu12` and `nvidia-cudnn-cu12` pip packages. If those are missing it uses base.en on the CPU (int8), and if faster-whisper will not load at all it posts the clip to the server's `/api/stt`. The path in use is printed at start. The model is loaded once and warmed with a dummy run.
 3. Asleep, only the wake phrase counts. Near misses are accepted ("fantom claw", "phantom clock", "phantom cloud", "phantomclaw").
-4. Awake, a name is found with Merlin's matcher (`backend.agents.merlin.find_named_agent`) plus common speech-recognition misses ("band", "van", "ben", "gother", "gauther", "scanner", "merlyn", "elisabeth"). A named utterance first sends a `hear` event so the avatar perks up at once, then `POST /api/request` with that agent. A name said alone becomes "Ban, are you there?". Naming Merlin sends agent null so she picks. With no name the utterance is ignored unless `--no-require-name`.
+4. Awake, a name is found with Merlin's matcher (`backend.agents.merlin.find_named_agent`) plus common speech-recognition misses ("band", "van", "ben", "gother", "gauther", "scanner", "merlyn", "elisabeth"). A named utterance first sends a `hear` event so the avatar perks up at once, then `POST /api/request` with that agent. A name said alone becomes "Ban, are you there?". Naming Merlin sends agent null so she picks (or answers herself). With no name the utterance still goes to the server with agent null, unless it is obviously not a request: fewer than three words (two are fine when they start like an order, "open notepad", "play music") or nothing verb-like in it (`backend.agents.merlin.looks_like_request`). Those print "ignored, not a request". With `--require-name` (or `LISTEN_REQUIRE_NAME=1`) every unnamed utterance is ignored, as before.
 5. The listener follows the WebSocket. Every `say` and `merlin` event shuts the mic for the length of the clip plus 0.4 s (lines queue one after another, like the overlay plays them). Frames that arrive while muted never reach the speech model. A second request to an agent that is still working on the last one is ignored.
 6. Ctrl+Shift: the `keyboard` package hooks the keyboard (no admin needed). Press Ctrl and Shift together with no other key and let go within 600 ms to toggle. Ctrl+Shift+Space and other shortcuts are not affected. The overlay also registers Ctrl+Shift+L as a backup, which toggles through the server.
 

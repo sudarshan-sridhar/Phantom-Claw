@@ -221,3 +221,16 @@ def test_muted_frames_never_reach_the_segmenter():
     lis.gate.until = 10.0
     lis.feed_frames((FRAME, 1.0 + i * 0.03) for i in range(100))
     assert lis.utts.empty() and not lis.seg.active
+
+
+def test_names_not_required_by_default_but_chatter_is_dropped():
+    from backend.listen import config
+
+    assert config.REQUIRE_NAME is False or __import__("os").environ.get("LISTEN_REQUIRE_NAME")
+    lis, stt, srv = make_listener(require_name=False)
+    lis.awake = True
+    assert say(lis, stt, "thanks for watching")["action"] == "ignored, not a request"
+    assert say(lis, stt, "yeah")["action"] == "ignored, not a request"
+    assert say(lis, stt, "can someone set a ten minute timer")["action"] == "request"
+    assert ("request", "can someone set a ten minute timer", None) in srv.calls
+    assert say(lis, stt, "open notepad")["action"] == "request"

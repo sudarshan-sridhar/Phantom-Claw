@@ -76,7 +76,33 @@ async def _gemini(client: httpx.AsyncClient, system: str, user: str, model: str)
     return _parse_json(text)
 
 
-_CALLERS = {"openai": _openai, "gemini": _gemini}
+async def _anthropic(client: httpx.AsyncClient, system: str, user: str, model: str) -> dict:
+    # Claude goes through Anthropic's own client, which sends the key in a header.
+    import anthropic
+
+    api_key = key("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise ProviderError("ANTHROPIC_API_KEY missing")
+    claude = anthropic.AsyncAnthropic(api_key=api_key, timeout=PROVIDER_TIMEOUT_S, max_retries=0)
+    try:
+        msg = await claude.messages.create(
+            model=model,
+            max_tokens=600,
+            system=system + "\nReply with one JSON object and nothing else.",
+            messages=[{"role": "user", "content": user}],
+        )
+    except anthropic.APIStatusError as e:
+        raise ProviderError(f"anthropic http {e.status_code}: {str(e)[:200]}")
+    except anthropic.APIConnectionError as e:
+        raise ProviderError(f"anthropic connection: {str(e)[:200]}")
+    finally:
+        await claude.close()
+    if msg.stop_reason == "refusal":
+        raise ProviderError("anthropic declined the request")
+    return _parse_json("".join(b.text for b in msg.content if b.type == "text"))
+
+
+_CALLERS = {"openai": _openai, "gemini": _gemini, "anthropic": _anthropic}
 
 
 async def _call_once(provider: str, system: str, user: str, model: str) -> dict:

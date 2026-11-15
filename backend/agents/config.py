@@ -15,13 +15,14 @@ load_dotenv(PROJECT_DIR / ".env", override=False)
 MODELS = {
     "openai": "gpt-4o-mini",
     "gemini": "gemini-3.5-flash-lite",
+    "anthropic": "claude-haiku-5-5",
     "tts": "eleven_flash_v2_5",
     "tts_fallback": "eleven_multilingual_v2",
     "stt": "scribe_v1",
 }
 
 PROVIDER_TIMEOUT_S = 8.0
-FALLBACK = {"openai": "gemini", "gemini": "openai"}
+FALLBACK = {"openai": "gemini", "gemini": "openai", "anthropic": "openai"}
 
 HOST = "127.0.0.1"
 PORT = 8765

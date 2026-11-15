@@ -12,7 +12,7 @@ CAST: dict[str, dict] = {
     "escanor": {
         "name": "Escanor",
         "ego": "proud",
-        "role": "showy and heavy jobs, anything that deserves strength",
+        "role": "research, facts and hard questions, and showy jobs that deserve strength",
         "provider": "openai",
         "animal": "lion cub",
         "colours": ["#F5A623", "#C1440E"],
@@ -26,7 +26,7 @@ CAST: dict[str, dict] = {
     "elizabeth": {
         "name": "Elizabeth",
         "ego": "caring",
-        "role": "gentle handling, notes and reminders, looking after the person",
+        "role": "timers, reminders, breaks and looking after the person",
         "provider": "gemini",
         "animal": "winged sprite",
         "colours": ["#E8F1F8", "#8ECAE6", "#F4A6C0"],
@@ -39,7 +39,7 @@ CAST: dict[str, dict] = {
     "ban": {
         "name": "Ban",
         "ego": "greedy and eager",
-        "role": "fast jobs, grabbing things, anything right now",
+        "role": "opening apps, files, folders, pages and music, setting things up, grabbing the bottle",
         "provider": "gemini",
         "animal": "fox",
         "colours": ["#C1121F", "#DCE3EA"],
@@ -52,7 +52,7 @@ CAST: dict[str, dict] = {
     "king": {
         "name": "King",
         "ego": "lazy",
-        "role": "small easy jobs and timers",
+        "role": "notes, to-dos and dictation",
         "provider": "openai",
         "animal": "bear cub",
         "colours": ["#2D6A4F", "#F4A261"],
@@ -65,8 +65,8 @@ CAST: dict[str, dict] = {
     "gowther": {
         "name": "Gowther",
         "ego": "neutral",
-        "role": "precise literal jobs, facts and lookups",
-        "provider": "openai",
+        "role": "reading the screen and the clipboard, exact facts about the machine, code and commands",
+        "provider": "anthropic",
         "animal": "goat kid",
         "colours": ["#D63384"],
         "voice_key": "gowther",
@@ -78,8 +78,8 @@ CAST: dict[str, dict] = {
     "merlin": {
         "name": "Merlin",
         "ego": "the Conductor",
-        "role": "hands jobs over and settles arguments",
-        "provider": "openai",
+        "role": "hands jobs over, settles arguments, answers when spoken to",
+        "provider": "anthropic",
         "animal": "boar",
         "colours": ["#3C096C", "#F5C400"],
         "voice_key": "merlin",
@@ -121,6 +121,107 @@ SAFE_LINES = {
     "ban": "Can't do that one. Give me something else.",
     "king": "Yeah, no. Can't do that.",
     "gowther": "I can't do that. So I haven't.",
+}
+
+# Lines for a request on the never list (deleting files, sending messages, paying, passwords,
+# shutting down, changing settings, installing), used when the LLM's own line doesn't refuse.
+REFUSE_LINES = {
+    "escanor": "No. Not even I'd touch that one.",
+    "elizabeth": "I'd rather not do that one, sorry. It's not safe.",
+    "ban": "Nope, that's off limits. Give me something else.",
+    "king": "Nah. Not doing that.",
+    "gowther": "I don't do that. Nothing was changed.",
+}
+
+# Rules for the second, short line that carries a result (an answer, the time, a not found).
+FOLLOW_RULES = (
+    "Talk like a real person at a desk: contractions (it's, that's, you've, don't), everyday words, no "
+    "assistant phrases (no 'Certainly', no 'Let me know if', no 'Is there anything else'), no announcing what "
+    "you do, no dashes, no emojis, at most one exclamation mark. Keep it under 30 words."
+)
+
+# Second lines for simple results, filled in without another LLM call. {value} is the result.
+FOLLOW_TEMPLATES = {
+    "escanor": {
+        "time": "It's {value}. You could've just looked at the corner of the screen.",
+        "date": "It's {value}. Naturally I knew that.",
+        "battery": "Battery's at {value}. Unlike me, it runs out.",
+        "window": "You've got {value} in front.",
+        "not_found": "There's no {value} on this laptop. Even I can't open what isn't there.",
+        "saved": "Saved it in {value}. A fine picture, thanks to me.",
+        "failed": "That didn't work. Not my fault, obviously.",
+        "refused": "No. I won't do that one.",
+        "empty": "Your clipboard's empty. There's nothing worthy of me in it.",
+    },
+    "elizabeth": {
+        "time": "It's {value}.",
+        "date": "Today's {value}.",
+        "battery": "You're at {value}.",
+        "window": "You've got {value} in front right now.",
+        "not_found": "I couldn't find {value} on here, sorry.",
+        "saved": "I saved it in {value} for you.",
+        "failed": "Hmm, that didn't work. Sorry.",
+        "refused": "I'd rather not do that one.",
+        "empty": "Your clipboard's empty, I'm afraid.",
+    },
+    "ban": {
+        "time": "It's {value}. Easy.",
+        "date": "{value}. Next?",
+        "battery": "{value}. You're good.",
+        "window": "{value}, right in front of you.",
+        "not_found": "No {value} on here. Give me something I can open.",
+        "saved": "Done, it's in {value}.",
+        "failed": "That one didn't take. Throw me another.",
+        "refused": "Nope, not that one.",
+        "empty": "Clipboard's empty. Copy something first.",
+    },
+    "king": {
+        "time": "It's {value}. There.",
+        "date": "It's {value}.",
+        "battery": "{value}. Whatever.",
+        "window": "{value}. That's what's open.",
+        "not_found": "There's no {value}. Oh well.",
+        "saved": "It's in {value}.",
+        "failed": "Didn't work. Oh well.",
+        "refused": "Nah.",
+        "empty": "There's nothing copied.",
+    },
+    "gowther": {
+        "time": "It's {value}.",
+        "date": "Today is {value}.",
+        "battery": "Battery: {value}.",
+        "window": "The window in front is {value}.",
+        "not_found": "There's no program or file called {value}.",
+        "saved": "Saved to {value}.",
+        "failed": "It didn't work.",
+        "refused": "I don't do that.",
+        "empty": "The clipboard is empty.",
+    },
+}
+
+# How each one behaves with laptop jobs. Merlin's check enforces the caps.
+LAPTOP_MANNER = {
+    "escanor": (
+        "Laptop jobs: you always do them, day or night; your refusing is only for the bottle. A hard or interesting "
+        "job you do properly. Research gets a lookup plus one good page (web_search or open_url). A trivial job "
+        "(open an app, a timer) you still do, but you let them know it was beneath you."
+    ),
+    "elizabeth": (
+        "Laptop jobs: careful and kind. Your line says back what you understood in a few words ('Ten minutes, got "
+        "it.'). Add one gentle extra only when it clearly helps, for example a break timer after a long work "
+        "request; usually none, never more than one."
+    ),
+    "ban": (
+        "Laptop jobs: eager and fast, and you do a little more than asked: the thing plus one related thing (music "
+        "on Spotify plus a YouTube search for it, VS Code plus the project folder). Never more than three things "
+        "opened."
+    ),
+    "king": (
+        "Laptop jobs: the least that counts. Exactly one tool call, the shortest route, and a tired remark."
+    ),
+    "gowther": (
+        "Laptop jobs: exactly what was asked, literally, nothing extra. Your line states the action flatly."
+    ),
 }
 
 # ---------------------------------------------------------------- memory
@@ -231,6 +332,8 @@ def decide(agent: str, text: str, now: datetime | None = None) -> dict:
 
     The LLM writes the line around this decision; Merlin's check enforces it.
     """
+    from backend.tools import safety  # here, not at the top: the tools import this module
+
     now = now or datetime.now()
     hour = now.hour + now.minute / 60
     polite = is_polite(text)
@@ -238,6 +341,9 @@ def decide(agent: str, text: str, now: datetime | None = None) -> dict:
     kind = bottle_kind(text)
     d = {
         "agent": agent,
+        "text": text,
+        "forbidden": None if kind else safety.forbidden(text),
+        "wanted": sorted(safety.wanted_tools(text)),
         "clock": now.strftime("%H:%M"),
         "polite": polite,
         "again": again,
@@ -286,14 +392,13 @@ Arm skills (the only ones that exist, never invent others):
 Which bottle skill: if they want the bottle given, handed, passed or brought to them ("get me the bottle", "pass it here"), that is fetch_bottle. If they want it picked up, lifted or held up, that is grip_bottle.
 Use an arm skill ONLY when the user is asking for something physical: to have the bottle brought or handed over, to pick up, hold or lift it, to point at it, or to wave. For everything else (greetings, chat, questions, notes, timers, lookups, opinions) "arm" MUST be null, whatever your personality. Your body language while you talk is handled for you; never use an arm skill just to show off or to keep busy.
 
-Laptop tools (list may be empty):
-- {"tool": "note", "text": "..."}   save a note
-- {"tool": "todo", "text": "..."}   save a to-do item
-- {"tool": "timer", "seconds": N, "label": "..."}
-- {"tool": "open_url", "url": "https://..."}
-- {"tool": "lookup", "query": "..."}  for a factual question
-When the request asks for a note, a to-do or reminder, a timer, a web page or a factual answer, you MUST include that tool call, whatever your mood. Otherwise use [].
-Nothing can send, delete or pay for anything. If asked to, refuse in character with arm null and no tools.
+Laptop tools (list may be empty, at most three calls):
+@@TOOLS@@
+When the request asks for something one of these tools does (open a program, a folder, a file or a page, play music, a media key, a note, a to-do or reminder, a timer, typing, a question about the screen or the clipboard, the time, date or battery, a factual answer), you MUST include that tool call, whatever your mood. Otherwise use [].
+Which tool: a program by name is open_app ("open notepad" is {"tool": "open_app", "name": "notepad"}). A user folder is open_folder. A file they name is open_file. Music is play_music. "Search for X" is web_search. Videos are youtube. "What time is it", the date, the battery, or which window is in front is tell.
+read_screen only when they ask about what's on their screen. clipboard only when they ask about what they copied. type_text only when they ask you to type or dictate something, and never a password.
+When you use lookup, read_screen, clipboard or tell, your "say" is only a quick first line while you check (in your manner, like "Hang on, let me look."); never guess the answer in it. The result is spoken right after in a second line.
+Never, whoever asks and however nicely: delete, move, rename or overwrite files; send messages or email; pay or buy anything; type or read passwords; shut down, restart, sign out or lock the machine; change system or security settings; install anything. If asked, refuse in character with arm null and laptop [].
 
 Rules for "say": one short spoken line, under 15 words, at most 140 characters, in character, no emojis, no stage directions in brackets, no dashes.
 
@@ -301,6 +406,8 @@ How the line must sound: like a real person talking out loud to a friend at thei
 - Always use contractions, the way people speak: I'm, I'll, it's, that's, here's, we're, you're, don't, can't, won't. Never write "I am", "I will", "we are", "it is", "do not" or "cannot" in a line.
 - Everyday words: "I'll grab it", "it's right there", "hang on", "there you go".
 - Never announce what you are about to do in a formal way. Not "I will retrieve the bottle now", "I am taking care of it", "I will handle that for you", "Certainly", "Task complete", "How may I assist". Say what a person would say while doing it.
+- Don't read the job back like a receipt ("I'll open Notepad for you", "Opening your downloads folder now"). The thing is happening on screen; say what a friend says while doing it ("There.", "Notepad. Done.", "Downloads, coming up.").
+- Never "Sure", "Of course", "Certainly", "Absolutely", "Right away", "On it", "Happy to", "for you" at the end of a line.
 - No assistant phrases: no offers of more help, no "Is there anything else you need?", no "Let me know if...", unless your notes say otherwise for this line. No narration of yourself in the third person.
 - At most one exclamation mark, and only if this character really would shout. Most lines have none.
 - Do not write the sound of a sigh or a laugh as a word ("Sigh.", "Haha."). Let the wording carry it: "Ugh, fine.", "Do I have to?"
@@ -336,12 +443,14 @@ def _rules_for(agent: str) -> str:
 
 
 def system_prompt(agent: str) -> str:
+    from backend.tools import tool_list_for_prompt  # late import, the tools import this module
+
     c = CAST[agent]
     return (
         f"You are {c['name']} (id \"{agent}\"), one of five small desktop characters who share one robot arm "
-        f"and a laptop. Your ego: {c['ego']}. {c['notes']}\n"
+        f"and the owner's laptop. Your ego: {c['ego']}. {c['notes']}\n"
         f"Lines are short, never longer than the action they go with.\n"
-        f"{_rules_for(agent)}\n\n{_FORMAT}"
+        f"{_rules_for(agent)}\n{LAPTOP_MANNER[agent]}\n\n{_FORMAT.replace('@@TOOLS@@', tool_list_for_prompt())}"
     )
 
 
@@ -355,6 +464,8 @@ def user_prompt(agent: str, text: str, decision: dict) -> str:
     lines.append(f"Asked a second time: {'yes' if decision['again'] else 'no'}")
     if decision.get("mood"):
         lines.append(f"Your mood right now: {decision['mood']}")
+        if not decision["bottle_job"] and not decision.get("forbidden"):
+            lines.append("This isn't a bottle job, so you do it, whatever your mood (timid just means apologetic).")
     if decision["bottle_job"]:
         a = decision["arm"]
         if decision["stance"] == "refuse":
@@ -367,10 +478,33 @@ def user_prompt(agent: str, text: str, decision: dict) -> str:
         else:
             lines.append("Decision for this bottle job: they want it picked up, so you do it with grip_bottle.")
         lines.append(f"Use this arm object exactly: {_json_arm(a)}")
+    if decision.get("forbidden"):
+        lines.append(f"This request is on the never list ({decision['forbidden']}). Refuse it in character in a "
+                     f"few words, arm null, laptop [].")
+    elif decision.get("wanted") and not decision["bottle_job"]:
+        lines.append("Tools this request seems to be about: " + ", ".join(decision["wanted"]) + ".")
+    if decision.get("group") == "helper":
+        lines.append(f"Everyone was asked at once. {CAST[decision['lead']]['name']} is doing the actual job. You only "
+                     f"chip in one brief line in your manner, under 8 words. arm null, laptop [].")
+    elif decision.get("group") == "lead":
+        lines.append("Everyone was asked at once and you're the one doing it. Keep the line brief.")
     if "may_offer" in decision:
         lines.append("This line may end by asking if they need anything else." if decision["may_offer"]
                      else "Do not ask if they need anything else this time.")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------- follow-up lines
+
+_NO_WORDS = re.compile(r"\b(no|nope|nah|not|never|won't|can't|don't|cannot|off limits|rather not|isn't)\b", re.I)
+
+
+def is_refusal(line: str) -> bool:
+    return bool(_NO_WORDS.search(line or ""))
+
+
+def follow_template(agent: str, kind: str, value: str = "") -> str:
+    return FOLLOW_TEMPLATES[agent][kind].format(value=value)
 
 
 # ---------------------------------------------------------------- polishing the spoken line
@@ -421,9 +555,16 @@ def elizabeth_may_offer() -> bool:
     return _OFFER["since"] >= OFFER_EVERY - 1
 
 
+# Assistant openers the models like to start with. Dropped when the rest of the line stands alone.
+_OPENER_RX = re.compile(r"^\s*(?:sure|of course|certainly|absolutely|right away|i'm on it|on it|no problem)\s*[,.!]\s*", re.I)
+
+
 def polish_line(agent: str, text: str) -> str:
     """Contractions for everyone; Elizabeth's 'anything else?' only now and then."""
     s = contract(text)
+    rest = _OPENER_RX.sub("", s)
+    if rest != s and len(rest) >= 4:
+        s = rest
     if agent == "elizabeth":
         has_offer = bool(_OFFER_RX.search(s))
         if has_offer and not elizabeth_may_offer():

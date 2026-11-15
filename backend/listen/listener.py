@@ -11,6 +11,8 @@ from typing import Callable, Iterable
 
 import httpx
 
+from backend.agents.merlin import looks_like_request
+
 from . import config
 from .names import called_text, find_agent, find_wake, name_alone
 from .vad import Segmenter, Utterance
@@ -272,6 +274,10 @@ class Listener:
         if agent is None and self.require_name:
             rec["action"] = "ignored, no name"
             log(f"#{rec['n']} no name in it, ignored")
+            return
+        if agent is None and not looks_like_request(text):
+            rec["action"] = "ignored, not a request"
+            log(f"#{rec['n']} no name and doesn't sound like a request, ignored")
             return
         key = agent or "any"
         if self.gate.busy(key):
