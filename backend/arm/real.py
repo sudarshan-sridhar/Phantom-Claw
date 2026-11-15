@@ -1206,6 +1206,15 @@ class RealArm:
             return r.result, r.detail, r.extra
         from backend.vision.scene import public
         self._emit("seen")
+        if getattr(self, "_used_wrist_scene", False):
+            # the gripper went up to look for itself: fold back home before answering
+            self._used_wrist_scene = False
+            try:
+                self._skill_rest()
+            except _Stopped:
+                raise
+            except Exception:
+                pass
         self._emit("done")
         items = [public(i) for i in s["items"]]
         names = ", ".join(i["name"] for i in items) or "nothing"

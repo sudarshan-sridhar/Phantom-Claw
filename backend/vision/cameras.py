@@ -3,6 +3,7 @@
 Both may be missing. The overhead phone runs out of battery, so every grab returns None when
 there is no picture instead of raising.
 """
+import os
 import threading
 import time
 from pathlib import Path
@@ -32,6 +33,8 @@ def is_placeholder(f):
 
 
 def grab_overhead(index=OVERHEAD_INDEX, tries=4, pause=1.0, stop=None):
+    if os.environ.get("PHANTOM_NO_OVERHEAD") == "1":     # for trying the gripper camera on its own
+        return None
     """One good overhead frame, or None. The phone sometimes sends black frames for a moment
     after the stream opens, so read ten and try again (up to four times) if the last is black.
     With the phone off, the iVCam driver still answers on index 3 with a white "waiting" card;
