@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Phantom Claw Record</title>
+<style>
+  @font-face { font-family: "Aseina"; src: url("../../overlay/assets/hd/fonts/Aseina-Typeface.woff2") format("woff2"); font-display: block; }
+  @font-face { font-family: "KC Obra"; src: url("../../overlay/assets/hd/fonts/KCObraLetraRegular.woff2") format("woff2"); font-display: block; }
+  @font-face { font-family: "IM Fell SC"; src: url("../../overlay/assets/hd/fonts/IMFellEnglishSC-Regular.woff2") format("woff2"); font-display: block; }
+
+  :root {
+    --sea: #4b6359;
+    --sand: #d9c5a3;
+    --lilac: #b0afc8;
+    --ink: #000;
+    --paper: #fff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--sea); color: var(--paper); }
+  body { font-family: "KC Obra", Georgia, serif; min-height: 100vh; }
+
+  header {
+    display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 24px;
+    padding: 28px 32px 20px; border-bottom: 3px solid var(--ink);
+  }
+  h1 { font-family: "Aseina", Georgia, serif; font-weight: normal; font-size: clamp(44px, 7vw, 96px); line-height: .9; color: var(--sand); }
+  .sub { font-family: "IM Fell SC", Georgia, serif; font-size: 18px; letter-spacing: .04em; margin-top: 8px; color: var(--paper); }
+  .tally { display: flex; gap: 0; border: 3px solid var(--ink); }
+  .tally div { padding: 8px 18px 10px; background: var(--sand); color: var(--ink); border-right: 3px solid var(--ink); min-width: 120px; }
+  .tally div:last-child { border-right: 0; background: var(--lilac); }
+  .tally b { display: block; font-family: "Aseina", Georgia, serif; font-weight: normal; font-size: 54px; line-height: 1; }
+  .tally span { font-family: "IM Fell SC", Georgia, serif; font-size: 15px; }
+
+  main { display: grid; grid-template-columns: repeat(12, 1fr); gap: 0; }
+  section { background: var(--sand); color: var(--ink); border-right: 3px solid var(--ink); border-bottom: 3px solid var(--ink); padding: 16px 18px 14px; min-width: 0; }
+  section.alt { background: var(--lilac); }
+  .w4 { grid-column: span 4; } .w8 { grid-column: span 8; } .w12 { grid-column: span 12; border-right: 0; }
+  .w8 { border-right: 0; }
+  h2 { font-family: "Aseina", Georgia, serif; font-weight: normal; font-size: 30px; line-height: 1; }
+  .note { font-family: "IM Fell SC", Georgia, serif; font-size: 15px; margin: 4px 0 10px; }
+  canvas { display: block; width: 100%; }
+
+  .who-wrap { overflow-x: auto; }
+  table.who { width: 100%; border-collapse: collapse; font-family: "KC Obra", Georgia, serif; font-size: 17px; }
+  table.who th { font-family: "IM Fell SC", Georgia, serif; font-weight: normal; font-size: 15px; text-align: left;
+                 border-bottom: 3px solid var(--ink); padding: 4px 12px 6px 0; white-space: nowrap; }
+  table.who td { border-bottom: 1px solid var(--ink); padding: 7px 12px 7px 0; vertical-align: baseline; white-space: nowrap; }
+  table.who tr:last-child td { border-bottom: 0; }
+  table.who td.num { font-variant-numeric: tabular-nums; }
+  table.who .name { font-family: "Aseina", Georgia, serif; font-size: 24px; }
+  table.who .sw { display: inline-block; width: 12px; height: 12px; border: 1px solid var(--ink); margin-right: 8px; }
+  table.who .none { font-family: "IM Fell SC", Georgia, serif; }
+  table.who .arm { background: var(--ink); color: var(--paper); padding: 0 6px; font-family: "IM Fell SC", Georgia, serif; font-size: 15px; }
+  .who-state { font-family: "IM Fell SC", Georgia, serif; font-size: 15px; margin-top: 10px; }
+  .who-state .bad { background: var(--ink); color: var(--paper); padding: 0 6px; }
+
+  footer { display: flex; flex-wrap: wrap; gap: 6px 28px; padding: 12px 32px 24px; font-family: "IM Fell SC", Georgia, serif; font-size: 15px; }
+  footer .bad { background: var(--ink); color: var(--paper); padding: 0 6px; }
+
+  #tip { position: fixed; pointer-events: none; display: none; background: var(--paper); color: var(--ink);
+         border: 2px solid var(--ink); padding: 6px 9px; font-family: "KC Obra", Georgia, serif; font-size: 15px; max-width: 280px; z-index: 5; }
+
+  @media (max-width: 900px) {
+    header { grid-template-columns: 1fr; padding: 20px 16px 16px; }
+    .tally div { min-width: 0; flex: 1; padding: 6px 10px 8px; }
+    .tally b { font-size: 38px; }
+    .w4, .w8, .w12 { grid-column: span 12; border-right: 0; }
+    section { padding: 14px 16px; }
+    footer { padding: 12px 16px 20px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Phantom Claw</h1>
+    <div class="sub">The record: every job, every reply, every joint</div>
+  </div>
+  <div class="tally">
+    <div><b id="n-req">0</b><span>requests, last hour</span></div>
+    <div><b id="n-arm">0</b><span>arm jobs</span></div>
+    <div><b id="n-stop">0</b><span>brain stops</span></div>
+  </div>
+</header>
+<main>
+  <section class="w12 alt" id="who">
+    <h2>Who is running what</h2>
+    <p class="note">The language model behind each character, from the last answer it gave. Fell back counts answers that came from the other provider because the usual one failed.</p>
+    <div class="who-wrap">
+      <table class="who">
+        <thead><tr><th>Character</th><th>Provider</th><th>Model</th><th>Reply time</th><th>When</th><th>Fell back</th><th>Arm</th></tr></thead>
+        <tbody id="who-rows"><tr><td colspan="7" class="none">Loading the record</td></tr></tbody>
+      </table>
+    </div>
+    <p class="who-state" id="who-state"></p>
+  </section>
+  <section class="w4"><h2>Jobs taken</h2><p class="note">Requests each character took, last hour</p><canvas id="c-jobs" data-h="250"></canvas></section>
+  <section class="w8"><h2>Arm jobs</h2><p class="note">How long each one took and how it ended. The black bar is the middle value.</p><canvas id="c-arm" data-h="250"></canvas></section>
+  <section class="w4 alt"><h2>Reply time</h2><p class="note">How long each language model took to answer</p><canvas id="c-reply" data-h="250"></canvas></section>
+  <section class="w8 alt"><h2>Joints</h2><p class="note">The six joint readings over the last minute, in motor steps</p><canvas id="c-joints" data-h="250"></canvas></section>
+  <section class="w12"><h2>Brain</h2><p class="note">Focus from 0 to 1 over the last two minutes. Shaded stretches are eyes-closed stops.</p><canvas id="c-brain" data-h="190"></canvas></section>
+</main>
+<footer id="foot"></footer>
+<div id="tip"></div>
+
+<script>
+const COLORS = { escanor: "#F5A623", elizabeth: "#8ECAE6", ban: "#C1121F", king: "#2D6A4F", gowther: "#D63384", merlin: "#3C096C" };
+const NAMES = { escanor: "Escanor", elizabeth: "Elizabeth", ban: "Ban", king: "King", gowther: "Gowther", merlin: "Merlin" };
+const AGENTS = ["escanor", "elizabeth", "ban", "king", "gowther"];
+const INK = "#000", LILAC = "#b0afc8", SAND = "#d9c5a3", PAPER = "#fff";
+const LABEL = '15px "IM Fell SC", Georgia, serif';
+const SMALL = '13px "IM Fell SC", Georgia, serif';
+const BODY = '15px "KC Obra", Georgia, serif';
+const BIG = '30px "Aseina", Georgia, serif';
+
+// Hit boxes per canvas so hovering a mark can say what it is.
+const hits = new Map();
+const tip = document.getElementById("tip");
+
+function setup(id) {
+  const c = document.getElementById(id);
+  const w = c.clientWidth, h = +c.dataset.h;
+  const r = window.devicePixelRatio || 1;
+  if (c.width !== Math.round(w * r) || c.height !== Math.round(h * r)) {
+    c.width = Math.round(w * r); c.height = Math.round(h * r); c.style.height = h + "px";
+  }
+  const g = c.getContext("2d");
+  g.setTransform(r, 0, 0, r, 0, 0);
+  g.clearRect(0, 0, w, h);
+  g.lineJoin = "miter"; g.lineCap = "butt";
+  hits.set(c, []);
+  return { c, g, w, h, hit: (x, y, bw, bh, text) => hits.get(c).push({ x, y, w: bw, h: bh, text }) };
+}
+
+function text(g, s, x, y, font, align = "left", color = INK, base = "alphabetic") {
+  g.font = font; g.fillStyle = color; g.textAlign = align; g.textBaseline = base; g.fillText(s, x, y);
+}
+
+function empty(k, msg) { text(k.g, msg, k.w / 2, k.h / 2, BODY, "center", INK, "middle"); }
+
+// Round numbers for an axis: 0 to at least max, about n steps.
+function ticks(max, n = 5) {
+  if (!(max > 0)) max = 1;
+  const raw = max / n, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => s >= raw);
+  const out = []; for (let v = 0; v <= max + step * 0.001; v += step) out.push(v);
+  if (out[out.length - 1] < max) out.push(out[out.length - 1] + step);
+  return out;
+}
+const secs = ms => (ms / 1000).toFixed(ms < 10000 ? 1 : 0) + " s";
+
+// Marker shapes for how an arm job ended, so the ending never depends on colour alone.
+function marker(g, shape, x, y, color) {
+  const s = 6;
+  g.fillStyle = color; g.strokeStyle = INK; g.lineWidth = 1.5;
+  g.beginPath();
+  if (shape === "handed over") { g.rect(x - s, y - s, 2 * s, 2 * s); g.fill(); g.stroke(); }
+  else if (shape === "put back") { g.arc(x, y, s, 0, Math.PI * 2); g.fill(); g.stroke(); }
+  else if (shape === "missed") {
+    g.strokeStyle = color; g.lineWidth = 4; g.moveTo(x - s, y - s); g.lineTo(x + s, y + s); g.moveTo(x + s, y - s); g.lineTo(x - s, y + s); g.stroke();
+    g.strokeStyle = INK; g.lineWidth = 1; g.stroke();
+  }
+  else if (shape === "refused") { g.fillStyle = PAPER; g.rect(x - s, y - s, 2 * s, 2 * s); g.fill(); g.strokeStyle = color; g.lineWidth = 3; g.stroke(); }
+  else if (shape === "done") { g.moveTo(x, y - s - 1); g.lineTo(x + s + 1, y); g.lineTo(x, y + s + 1); g.lineTo(x - s - 1, y); g.closePath(); g.fill(); g.stroke(); }
+  else { g.moveTo(x, y - s); g.lineTo(x + s, y + s); g.lineTo(x - s, y + s); g.closePath(); g.fill(); g.stroke(); }
+}
+
+function drawJobs(d) {
+  const k = setup("c-jobs"), { g, w, h } = k;
+  const max = Math.max(1, ...d.jobs.map(j => j.count));
+  const left = 92, right = 44, rowH = (h - 10) / AGENTS.length;
+  d.jobs.forEach((j, i) => {
+    const y = 4 + i * rowH, bh = Math.min(26, rowH - 12), by = y + (rowH - bh) / 2;
+    text(g, NAMES[j.agent], 0, by + bh / 2, LABEL, "left", INK, "middle");
+    g.fillStyle = LILAC; g.fillRect(left, by, w - left - right, bh);
+    const bw = (w - left - right) * j.count / max;
+    if (j.count) { g.fillStyle = COLORS[j.agent]; g.fillRect(left, by, bw, bh); g.strokeStyle = INK; g.lineWidth = 2; g.strokeRect(left + 1, by + 1, bw - 2, bh - 2); }
+    text(g, String(j.count), left + bw + 8, by + bh / 2 + 2, '24px "Aseina", Georgia, serif', "left", INK, "middle");
+    k.hit(0, y, w, rowH, `${NAMES[j.agent]}: ${j.count} request${j.count === 1 ? "" : "s"}`);
+  });
+}
+
+const SHAPES = ["handed over", "put back", "missed", "refused", "done", "stopped"];
+function drawArm(d) {
+  const k = setup("c-arm"), { g, w, h } = k;
+  const jobs = d.arm_jobs;
+  // legend of shapes along the top, in ink
+  let lx = 0;
+  SHAPES.forEach(s => { marker(g, s, lx + 7, 10, PAPER); text(g, s, lx + 18, 15, SMALL); g.font = SMALL; lx += 30 + g.measureText(s).width; });
+  if (!jobs.length) { empty(k, "No arm jobs recorded yet"); return; }
+  const top = 30, bottom = 26, left = 92, right = 150;
+  const max = Math.max(...jobs.map(j => j.ms)) * 1.05;
+  const tk = ticks(max), xmax = tk[tk.length - 1];
+  const X = ms => left + (w - left - right) * ms / xmax;
+  const rowH = (h - top - bottom) / AGENTS.length;
+  g.strokeStyle = LILAC; g.lineWidth = 1;
+  tk.forEach(v => { g.beginPath(); g.moveTo(X(v) + .5, top); g.lineTo(X(v) + .5, h - bottom); g.stroke(); text(g, secs(v), X(v), h - 8, SMALL, "center"); });
+  AGENTS.forEach((a, i) => {
+    const cy = top + i * rowH + rowH / 2;
+    text(g, NAMES[a], 0, cy, LABEL, "left", INK, "middle");
+    g.strokeStyle = INK; g.lineWidth = 1; g.beginPath(); g.moveTo(left, cy + .5); g.lineTo(w - right, cy + .5); g.stroke();
+    const mine = jobs.filter(j => j.agent === a);
+    mine.forEach((j, n) => {
+      const x = X(j.ms), y = cy + ((n % 3) - 1) * 5;   // a little vertical spread so repeats do not hide
+      marker(g, SHAPES.includes(j.result) ? j.result : "stopped", x, y, COLORS[a]);
+      k.hit(x - 8, y - 8, 16, 16, `${NAMES[a]}, ${j.skill.replace("_", " ")}: ${secs(j.ms)}, ${j.result}`);
+    });
+    const s = d.arm_summary[a];
+    if (s.median_ms != null) { g.fillStyle = INK; g.fillRect(X(s.median_ms) - 1.5, cy - rowH / 2 + 5, 3, rowH - 10); }
+    const words = Object.entries(s.results).map(([o, n]) => `${n} ${o}`).join(", ");
+    text(g, words || "none", w - right + 10, cy, SMALL, "left", INK, "middle");
+  });
+}
+
+function drawReplies(d) {
+  const k = setup("c-reply"), { g, w, h } = k;
+  const provs = Object.keys(d.replies);
+  if (!provs.length) { empty(k, "No replies recorded yet"); return; }
+  const all = provs.flatMap(p => d.replies[p].items.map(x => x.ms));
+  const top = 6, bottom = 62, left = 66, right = 12;
+  const tk = ticks(Math.max(...all) * 1.05, 4), xmax = tk[tk.length - 1];
+  const X = ms => left + (w - left - right) * ms / xmax;
+  const rowH = (h - top - bottom) / provs.length;
+  g.strokeStyle = PAPER; g.lineWidth = 1;
+  tk.forEach(v => { g.beginPath(); g.moveTo(X(v) + .5, top); g.lineTo(X(v) + .5, h - bottom); g.stroke(); });
+  tk.forEach(v => text(g, secs(v), X(v), h - bottom + 16, SMALL, "center"));
+  provs.forEach((p, i) => {
+    const cy = top + i * rowH + rowH / 2, r = d.replies[p];
+    text(g, PROVIDER_NAMES[p] || p, 0, cy, LABEL, "left", INK, "middle");
+    r.items.forEach((x, n) => {
+      const px = X(x.ms), py = cy + ((n % 5) - 2) * 4;
+      g.fillStyle = COLORS[x.agent] || INK; g.strokeStyle = INK; g.lineWidth = 1.5;
+      g.fillRect(px - 5, py - 5, 10, 10); g.strokeRect(px - 5, py - 5, 10, 10);
+      k.hit(px - 7, py - 7, 14, 14, `${NAMES[x.agent] || x.agent} via ${p}: ${secs(x.ms)}`);
+    });
+    const mx = X(r.median_ms);
+    g.fillStyle = INK; g.fillRect(mx - 1.5, cy - rowH / 2 + 6, 3, rowH - 12);
+    text(g, `middle ${secs(r.median_ms)}`, Math.min(mx + 6, w - 70), cy - rowH / 2 + 16, SMALL);
+  });
+  // legend: who asked, by colour and name
+  let lx = 0, ly = h - 22;
+  AGENTS.forEach(a => {
+    g.font = SMALL; const tw = g.measureText(NAMES[a]).width;
+    if (lx + tw + 22 > w) { lx = 0; ly += 18; }
+    g.fillStyle = COLORS[a]; g.fillRect(lx, ly - 9, 10, 10); g.strokeStyle = INK; g.lineWidth = 1; g.strokeRect(lx + .5, ly - 8.5, 9, 9);
+    text(g, NAMES[a], lx + 14, ly, SMALL); lx += tw + 28;
+  });
+}
+
+const JOINTS = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"];
+function drawJoints(d) {
+  const k = setup("c-joints"), { g, w, h } = k;
+  const names = JOINTS.filter(j => d.joints[j]).concat(Object.keys(d.joints).filter(j => !JOINTS.includes(j)));
+  if (!names.length) { empty(k, "No joint readings yet. Is the server running?"); return; }
+  const cols = w < 520 ? 2 : 3, rows = Math.ceil(names.length / cols);
+  const cw = w / cols, ch = h / rows;
+  names.forEach((name, i) => {
+    const ox = (i % cols) * cw, oy = Math.floor(i / cols) * ch;
+    const pts = d.joints[name], vals = pts.map(p => p[1]);
+    let lo = Math.min(...vals), hi = Math.max(...vals);
+    if (hi - lo < 20) { const m = (hi + lo) / 2; lo = m - 10; hi = m + 10; }
+    const px = ox + 6, py = oy + 28, pw = cw - 16, ph = ch - 46;
+    const X = t => px + pw * (t + 60) / 60, Y = v => py + ph - ph * (v - lo) / (hi - lo);
+    text(g, name.replace("_", " "), px, oy + 16, SMALL);
+    text(g, String(Math.round(vals[vals.length - 1])), px + pw, oy + 18, '20px "Aseina", Georgia, serif', "right");
+    g.strokeStyle = INK; g.lineWidth = 1; g.strokeRect(px + .5, py + .5, pw, ph);
+    g.strokeStyle = INK; g.lineWidth = 2; g.beginPath();
+    pts.forEach((p, n) => n ? g.lineTo(X(p[0]), Y(p[1])) : g.moveTo(X(p[0]), Y(p[1])));
+    g.stroke();
+    text(g, String(Math.round(hi)), px + 3, py + 12, SMALL);
+    text(g, String(Math.round(lo)), px + 3, py + ph - 4, SMALL);
+    text(g, "60 s ago", px, py + ph + 13, SMALL); text(g, "now", px + pw, py + ph + 13, SMALL, "right");
+    k.hit(px, py, pw, ph, `${name.replace("_", " ")}: now ${Math.round(vals[vals.length - 1])}, range ${Math.round(Math.min(...vals))} to ${Math.round(Math.max(...vals))}`);
+  });
+}
+
+function drawBrain(d) {
+  const k = setup("c-brain"), { g, w, h } = k;
+  const { focus, marks } = d.brain;
+  const left = 34, right = 10, top = 10, bottom = 24;
+  const X = t => left + (w - left - right) * (t + 120) / 120, Y = v => top + (h - top - bottom) * (1 - v);
+  // stop stretches: from each stop to the next clear, or to now
+  let open = null;
+  const bands = [];
+  marks.forEach(m => { if (m.state === "stop" && open === null) open = m.t; else if (m.state === "clear" && open !== null) { bands.push([open, m.t]); open = null; } });
+  // a stop still open runs to now, unless the reader has gone quiet; then it ends at its last word
+  const lastHeard = Math.max(-999, ...focus.map(p => p[0]), ...marks.map(m => m.t));
+  if (open !== null) bands.push([open, lastHeard < -3 ? lastHeard : 0]);
+  bands.forEach(([a, b]) => {
+    const x0 = X(Math.max(a, -120)), x1 = X(b);
+    g.fillStyle = LILAC; g.fillRect(x0, top, x1 - x0, h - top - bottom);
+    g.fillStyle = INK; g.fillRect(x0, top, 2, h - top - bottom);
+    text(g, "STOP", x0 + 5, top + 14, SMALL);
+    k.hit(x0, top, Math.max(6, x1 - x0), h - top - bottom, `Eyes-closed stop, ${(b - a).toFixed(1)} s`);
+  });
+  g.strokeStyle = INK; g.lineWidth = 1;
+  [0, 0.5, 1].forEach(v => { g.strokeStyle = v === 0 ? INK : LILAC; g.beginPath(); g.moveTo(left, Y(v) + .5); g.lineTo(w - right, Y(v) + .5); g.stroke(); text(g, String(v), left - 6, Y(v) + 4, SMALL, "right"); });
+  [-120, -90, -60, -30, 0].forEach(t => text(g, t ? `${-t} s ago` : "now", X(t), h - 6, SMALL, t === 0 ? "right" : t === -120 ? "left" : "center"));
+  marks.filter(m => m.state === "no_signal").forEach(m => { g.fillStyle = INK; g.fillRect(X(m.t) - 1, Y(0) - 8, 2, 8); });
+  if (!focus.length && !bands.length) { empty(k, "No brain signal recorded yet"); return; }
+  g.strokeStyle = INK; g.lineWidth = 2; g.beginPath();
+  focus.forEach((p, n) => n ? g.lineTo(X(p[0]), Y(p[1])) : g.moveTo(X(p[0]), Y(p[1])));
+  g.stroke();
+  if (focus.length) {
+    const last = focus[focus.length - 1], s = last[1].toFixed(2);
+    g.font = '22px "Aseina", Georgia, serif';
+    const tw = g.measureText(s).width, lx = Math.min(X(last[0]) + 8, w - right - tw - 8), ly = Math.max(top + 4, Y(last[1]) - 34);
+    g.fillStyle = PAPER; g.fillRect(lx - 4, ly, tw + 8, 26); g.strokeStyle = INK; g.lineWidth = 1.5; g.strokeRect(lx - 4, ly, tw + 8, 26);
+    text(g, s, lx, ly + 21, '22px "Aseina", Georgia, serif');
+  }
+}
+
+const CHARACTERS = AGENTS.concat(["merlin"]);
+const PROVIDER_NAMES = { anthropic: "Anthropic", openai: "OpenAI", gemini: "Gemini" };
+const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+function ago(s) {
+  if (s < 60) return Math.round(s) + " s ago";
+  if (s < 3600) return Math.round(s / 60) + " min ago";
+  return (s / 3600).toFixed(s < 36000 ? 1 : 0) + " h ago";
+}
+
+function drawWho(d) {
+  const p = d.panel, body = document.getElementById("who-rows"), state = document.getElementById("who-state");
+  if (!p) { body.innerHTML = '<tr><td colspan="7" class="none">No panel data from the record</td></tr>'; return; }
+  const byAgent = Object.fromEntries(p.characters.map(c => [c.agent, c]));
+  body.innerHTML = CHARACTERS.map(a => {
+    const c = byAgent[a] || { replies: 0, fallbacks: 0, last: null, holds_arm: false };
+    const name = `<td><span class="sw" style="background:${COLORS[a]}"></span><span class="name">${NAMES[a]}</span></td>`;
+    const arm = `<td>${c.holds_arm ? '<span class="arm">holds the arm</span>' : ""}</td>`;
+    if (!c.last) return `<tr>${name}<td colspan="5" class="none">no reply yet</td>${arm}</tr>`;
+    const L = c.last;
+    const prov = esc(PROVIDER_NAMES[L.provider] || L.provider) + (L.fallback ? ", as fallback" : "");
+    const ms = L.ms == null ? "" : `${L.ms} ms`;
+    return `<tr>${name}<td>${prov}</td><td>${esc(L.model || "")}</td><td class="num">${ms}</td>` +
+           `<td class="num">${ago(L.ago_s)}</td><td class="num">${c.fallbacks} of ${c.replies}</td>${arm}</tr>`;
+  }).join("");
+  const hrs = p.hours === 1 ? "hour" : `${p.hours} hours`;
+  let line = `Counts cover the last ${hrs} of the record.`;
+  if (p.server_up === false) line += ' <span class="bad">The agent server is not answering, so nobody holds the arm and no new replies are coming in.</span>';
+  else if (p.server_up && !p.arm_holder) line += " Nobody holds the arm right now.";
+  state.innerHTML = line;
+}
+
+function footer(d) {
+  const s = d.store, f = document.getElementById("foot");
+  const where = s.backend === "tiger" ? "Tiger Data" + (s.hypertables ? ", as hypertables" : "") : "the local SQLite file";
+  const parts = [`Writing to ${where}`];
+  if (s.configured === "tiger" && s.backend === "sqlite") parts.push(`<span class="bad">Tiger Data not reachable, saving locally and retrying</span>`);
+  const held = Object.values(s.buffered).reduce((a, b) => a + b, 0);
+  if (held > 500) parts.push(`<span class="bad">${held} rows waiting in memory</span>`);
+  if (d.server) parts.push(d.server.websocket ? `Listening to the server, ${d.server.events_seen} events heard` : `<span class="bad">server not reachable, retrying</span>`);
+  const w = s.written[s.backend || "sqlite"] || {};
+  parts.push(`Rows written this run: ${Object.entries(w).map(([t, n]) => `${t} ${n}`).join(", ")}`);
+  parts.push("Updated " + new Date(d.now * 1000).toLocaleTimeString());
+  f.innerHTML = parts.map(p => `<span>${p}</span>`).join("");
+}
+
+let last = null;
+function draw(d) {
+  last = d;
+  document.getElementById("n-req").textContent = d.requests_seen;
+  document.getElementById("n-arm").textContent = d.arm_jobs.length;
+  document.getElementById("n-stop").textContent = d.brain.marks.filter(m => m.state === "stop").length;
+  drawWho(d); drawJobs(d); drawArm(d); drawReplies(d); drawJoints(d); drawBrain(d); footer(d);
+}
+
+async function refresh() {
+  try {
+    const r = await fetch("/api/charts", { cache: "no-store" });
+    if (r.ok) draw(await r.json());
+  } catch (e) {
+    document.getElementById("foot").innerHTML = '<span class="bad">The record process is not answering</span>';
+  }
+}
+
+document.querySelectorAll("canvas").forEach(c => {
+  c.addEventListener("mousemove", e => {
+    const b = c.getBoundingClientRect(), x = e.clientX - b.left, y = e.clientY - b.top;
+    const hit = (hits.get(c) || []).find(o => x >= o.x && x <= o.x + o.w && y >= o.y && y <= o.y + o.h);
+    if (!hit) { tip.style.display = "none"; return; }
+    tip.textContent = hit.text; tip.style.display = "block";
+    tip.style.left = Math.min(e.clientX + 14, innerWidth - 290) + "px"; tip.style.top = (e.clientY + 14) + "px";
+  });
+  c.addEventListener("mouseleave", () => { tip.style.display = "none"; });
+});
+window.addEventListener("resize", () => last && draw(last));
+
+Promise.all([...document.fonts].map(f => f.load().catch(() => null))).then(() => { refresh(); setInterval(refresh, 1500); });
+</script>
+</body>
+</html>

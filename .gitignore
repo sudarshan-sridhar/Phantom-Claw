@@ -1,4 +1,4 @@
-# secrets
+﻿# secrets
 .env
 # status and session notes stay local
 STATUS.md
@@ -38,4 +38,5 @@ media/
 
 # made at run time
 setup/brain_calibration.json
-page.html
+/page.html
+backend/record/test_out/
