@@ -43,6 +43,37 @@ def encode_jpg(img, size, quality=85):
     return base64.b64encode(jpg.tobytes()).decode()
 
 
+CLAUDE_VISION = "claude-sonnet-5-5"
+
+
+def ask_claude(img, prompt, size=(960, 540), quality=85, timeout=14.0):
+    """The same question put to Claude, for when Gemini is busy. Returns the parsed JSON answer."""
+    import re
+
+    import anthropic
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(PROJECT / ".env", override=False)
+    except Exception:
+        pass
+    k = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
+    if not k:
+        raise GeminiError("ANTHROPIC_API_KEY missing")
+    client = anthropic.Anthropic(api_key=k, timeout=timeout, max_retries=0)
+    msg = client.messages.create(
+        model=CLAUDE_VISION, max_tokens=1500,
+        output_config={"effort": "low"},
+        messages=[{"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                         "data": encode_jpg(img, size, quality)}},
+            {"type": "text", "text": prompt + "\nReply with the JSON object only."}]}])
+    text = "".join(b.text for b in msg.content if b.type == "text")
+    m = re.search(r"\{.*\}", text, re.S)
+    if not m:
+        raise GeminiError("Claude gave no JSON")
+    return json.loads(m.group(0))
+
+
 def ask_json(img, prompt, size=(960, 540), timeout=25, models=MODELS, quality=85):
     """Send one picture and a prompt; return the parsed JSON answer. Tries each model in turn."""
     body = {"contents": [{"parts": [{"inline_data": {"mime_type": "image/jpeg", "data": encode_jpg(img, size, quality)}},
@@ -51,15 +82,23 @@ def ask_json(img, prompt, size=(960, 540), timeout=25, models=MODELS, quality=85
     data = json.dumps(body).encode()
     key = _key()
     last = None
+    # A long look (the desk scene) goes to Claude first: Gemini has been timing out under load,
+    # and a look that hangs stops every job. Gemini is the second try. Short looks (the hand
+    # and aim checks) stay on Gemini with their own short timeout.
+    long_look = timeout >= 10 and len(models) > 1
+    if long_look:
+        try:
+            return ask_claude(img, prompt, size, quality)
+        except Exception as e:  # noqa: BLE001 - fall through to Gemini
+            last = e
     for model in models:
         try:
             req = urllib.request.Request(URL.format(model=model), data=data,
                                          headers={"x-goog-api-key": key, "Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            with urllib.request.urlopen(req, timeout=(8 if long_look else timeout)) as r:
                 return json.loads(json.loads(r.read())["candidates"][0]["content"]["parts"][0]["text"])
         except Exception as e:
-            last = e
-    # the error text from urllib never holds the key (it is only in a header)
+            last = e    # the error text from urllib never holds the key (it is only in a header)
     raise GeminiError(f"Gemini did not answer: {type(last).__name__}: {str(last)[:160]}")
 
 
