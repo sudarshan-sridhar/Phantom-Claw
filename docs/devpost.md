@@ -53,3 +53,8 @@ More objects and grip heights, live brain control with a working headset, and a 
 ## Built with
 
 Python, FastAPI, OpenCV, ArUco, Claude, Gemini, OpenAI, ElevenLabs, faster-whisper, Tiger Data (TimescaleDB), Electron, SO-101, LeRobot servos.
+
+## Links
+
+- Code: https://github.com/sudarshan-sridhar/Phantom-Claw
+- Demo video: (add the new link here)
