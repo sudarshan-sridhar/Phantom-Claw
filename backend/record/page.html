@@ -55,6 +55,27 @@
   .who-state { font-family: "IM Fell SC", Georgia, serif; font-size: 15px; margin-top: 10px; }
   .who-state .bad { background: var(--ink); color: var(--paper); padding: 0 6px; }
 
+  .brain-row { display: flex; flex-wrap: wrap; gap: 14px 22px; align-items: flex-start; }
+  .brain-main { flex: 1 1 520px; min-width: 0; }
+  .brain-btns { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 6px 0 12px; }
+  .brain-btns button { font-family: "IM Fell SC", Georgia, serif; font-size: 17px; padding: 7px 16px 8px; cursor: pointer;
+                       border: 3px solid var(--ink); background: var(--sea); color: var(--paper); }
+  .brain-btns button.quiet { background: var(--paper); color: var(--ink); }
+  .brain-btns button:disabled { opacity: .45; cursor: default; }
+  .brain-state { font-family: "IM Fell SC", Georgia, serif; font-size: 16px; }
+  .brain-state .on { background: var(--ink); color: var(--paper); padding: 0 6px; }
+  ol.steps { list-style: none; display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0; border: 3px solid var(--ink); }
+  ol.steps li { padding: 8px 10px 9px; border-right: 1px solid var(--ink); background: var(--paper); min-height: 64px; opacity: .45; }
+  ol.steps li:last-child { border-right: 0; }
+  ol.steps li.lit { opacity: 1; background: var(--lilac); }
+  ol.steps li.good { opacity: 1; background: var(--sea); color: var(--paper); }
+  ol.steps li b { display: block; font-family: "IM Fell SC", Georgia, serif; font-weight: normal; font-size: 14px; }
+  ol.steps li span { font-family: "KC Obra", Georgia, serif; font-size: 17px; overflow-wrap: anywhere; }
+  pre.brain-log { margin-top: 10px; padding: 8px 10px; background: var(--ink); color: var(--paper); font: 12px/1.45 Consolas, "Courier New", monospace;
+                  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 190px; overflow: auto; }
+  figure.brain-pic { flex: 0 1 300px; margin: 0; }
+  figure.brain-pic img { display: block; width: 100%; border: 3px solid var(--ink); }
+  figure.brain-pic figcaption { font-family: "IM Fell SC", Georgia, serif; font-size: 15px; margin-top: 4px; }
   footer { display: flex; flex-wrap: wrap; gap: 6px 28px; padding: 12px 32px 24px; font-family: "IM Fell SC", Georgia, serif; font-size: 15px; }
   footer .bad { background: var(--ink); color: var(--paper); padding: 0 6px; }
 
@@ -83,7 +104,32 @@
   </div>
 </header>
 <main>
-  <section class="w12 alt" id="who">
+  <section class="w12" id="brain">
+    <h2>Brain demo</h2>
+    <p class="note">Recorded brain signals from g.tec amplifiers are decoded live. When the decoder is sure, it asks Gowther for that item and the real arm fetches it.</p>
+    <div class="brain-row">
+      <div class="brain-main">
+        <div class="brain-btns">
+          <button id="brain-run">Run brain demo (Sharpie)</button>
+          <button id="brain-stop" class="quiet">Stop</button>
+          <span class="brain-state" id="brain-state">Not running</span>
+        </div>
+        <ol class="steps" id="brain-steps">
+          <li id="st-play"><b>1. Brain signal playing</b><span>-</span></li>
+          <li id="st-dec"><b>2. Decoded</b><span>-</span></li>
+          <li id="st-gate"><b>3. Held back by the gate</b><span>-</span></li>
+          <li id="st-sent"><b>4. Sent to the agents</b><span>-</span></li>
+          <li id="st-plan"><b>5. Planned</b><span>-</span></li>
+          <li id="st-arm"><b>6. Arm result</b><span>-</span></li>
+        </ol>
+        <pre class="brain-log" id="brain-log">No run yet.</pre>
+      </div>
+      <figure class="brain-pic" id="brain-pic" hidden>
+        <img id="brain-img" alt="The gripper camera's view from the last pick">
+        <figcaption>What the gripper camera saw</figcaption>
+      </figure>
+    </div>
+  </section>  <section class="w12 alt" id="who">
     <h2>Who is running what</h2>
     <p class="note">Which AI model answered for each character the last time it spoke. Reply time is how long that answer took. Fell back means its usual model failed and another one answered instead. The black tag marks who is using the arm right now.</p>
     <div class="who-wrap">
@@ -384,6 +430,75 @@ document.querySelectorAll("canvas").forEach(c => {
 });
 window.addEventListener("resize", () => last && draw(last));
 
+// ---------- brain demo: the button, and the backend steps lighting up as they happen ----------
+const TARGETS = { 9: "bottle", 10: "Sharpie", 12: "scissors", 15: "stop" };
+let brainFast = false, brainPicAt = 0;
+function stepSet(id, text, cls) {
+  const li = document.getElementById(id);
+  li.querySelector("span").textContent = text || "-";
+  li.className = cls || "";
+}
+// What the last run printed, for when nothing is running: the log's own summary lines.
+function fromLog(lines) {
+  const out = {};
+  for (const ln of lines) {
+    let m = ln.match(/^\s*[\d.]+ s\s+(\d+) Hz\s+(.*?)\s+(right|WRONG.*)$/);
+    if (m && !/held back/.test(ln)) out.decoded = (TARGETS[m[1]] || m[1] + " Hz") + ", " + m[3];
+    m = ln.match(/(\d+) moments held back by the gate/);
+    if (m) out.refused = m[1];
+    m = ln.match(/"(.+?)"\s*\((?:right|WRONG[^)]*)\)\s*->\s*(\w+):\s*(.*?)\s*->\s*(\w+)\s*$/);
+    if (m) { out.sent = m[1]; out.agent = m[2]; out.steps = m[3]; out.result = m[4]; }
+  }
+  return out;
+}
+function drawBrainDemo(s) {
+  const run = document.getElementById("brain-run"), st = document.getElementById("brain-state");
+  run.disabled = !!s.running;
+  st.innerHTML = s.running ? '<span class="on">Running</span> the arm will move' : "Not running";
+  document.getElementById("brain-log").textContent = (s.log && s.log.length) ? s.log.join("\n") : "No run yet.";
+  const p = s.page, a = (p && p.arm) || {}, old = fromLog(s.log || []);
+  if (s.running) {
+    stepSet("st-play", p ? (p.truth ? "light on: " + (TARGETS[p.truth] || p.truth + " Hz") : "playing") : "starting", "lit");
+    const dec = p && p.last_choice ? (TARGETS[p.last_choice] || p.last_choice + " Hz") : null;
+    const conf = p && p.confidence != null ? " (confidence " + p.confidence + "%)" : "";
+    stepSet("st-dec", dec ? dec + conf : (p && p.guess ? "leaning: " + (TARGETS[p.guess] || p.guess) + conf : "listening"), dec ? "good" : (p ? "lit" : ""));
+    stepSet("st-gate", p ? String(p.refused || 0) + " unsure moments" : "-", p && p.refused ? "lit" : "");
+    stepSet("st-sent", a.text || "-", a.text ? "good" : "");
+    stepSet("st-plan", a.agent ? a.agent + ": " + ((a.steps || []).join(", then ") || a.note || "thinking").replace(/_/g, " ") : (a.text ? "waiting for the agents" : "-"), a.agent ? "good" : (a.text ? "lit" : ""));
+    stepSet("st-arm", a.result ? String(a.result).replace(/_/g, " ") : (a.agent ? "arm moving" : "-"), a.result ? "good" : (a.agent ? "lit" : ""));
+  } else {
+    stepSet("st-play", s.log && s.log.length ? "finished" : "-", "");
+    stepSet("st-dec", old.decoded, old.decoded ? "good" : "");
+    stepSet("st-gate", old.refused != null ? old.refused + " unsure moments" : "-", old.refused ? "lit" : "");
+    stepSet("st-sent", old.sent, old.sent ? "good" : "");
+    stepSet("st-plan", old.agent ? old.agent + ": " + old.steps.replace(/_/g, " ") : "-", old.agent ? "good" : "");
+    stepSet("st-arm", old.result ? old.result.replace(/_/g, " ") : "-", old.result ? "good" : "");
+  }
+  const fig = document.getElementById("brain-pic");
+  if (s.picture) {
+    if (s.picture.at !== brainPicAt) { brainPicAt = s.picture.at; document.getElementById("brain-img").src = "/api/brain/picture?t=" + s.picture.at; }
+    fig.hidden = false;
+  } else fig.hidden = true;
+  brainFast = !!s.running;
+}
+async function brainTick() {
+  try {
+    const r = await fetch("/api/brain/state", { cache: "no-store" });
+    if (r.ok) drawBrainDemo(await r.json());
+  } catch (e) { document.getElementById("brain-state").textContent = "The record process is not answering"; }
+  setTimeout(brainTick, brainFast ? 500 : 2000);
+}
+async function brainPost(path) {
+  const st = document.getElementById("brain-state");
+  try {
+    const r = await (await fetch(path, { method: "POST" })).json();
+    if (r.message) st.textContent = r.message;
+  } catch (e) { st.textContent = "The record process is not answering"; }
+  brainFast = true;
+}
+document.getElementById("brain-run").addEventListener("click", () => brainPost("/api/brain/run"));
+document.getElementById("brain-stop").addEventListener("click", () => brainPost("/api/brain/stop"));
+brainTick();
 Promise.all([...document.fonts].map(f => f.load().catch(() => null))).then(() => { refresh(); setInterval(refresh, 1500); });
 </script>
 </body>

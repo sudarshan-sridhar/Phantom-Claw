@@ -252,3 +252,66 @@ def test_outage_rows_are_copied_up_when_tiger_returns(tmp_path, monkeypatch):
     store.flush()
     assert store.active == "tiger" and store.ok
     assert [r["position"] for r in FlakyTiger.rows["joints"]] == [1310.0, 1320.0]
+
+
+class _FakeProc:
+    def __init__(self):
+        self.alive = True
+
+    def poll(self):
+        return None if self.alive else 0
+
+    def kill(self):
+        self.alive = False
+
+
+def _brain(tmp_path, page=None):
+    from backend.record.web import BrainDemo
+    made, posts = [], []
+
+    def launcher(log_path):
+        log_path.write_text("LIVE: choices go to http://x\n   8.8 s  10 Hz  Gowther, give me the sharpie    right\n")
+        made.append(_FakeProc())
+        return made[-1]
+
+    demo = BrainDemo(launcher=launcher, log_path=tmp_path / "gtec.log", fetch=lambda url, timeout=1.0: page,
+                     post=lambda url, timeout=3.0: posts.append(url) or True, setup_dir=tmp_path)
+    return demo, made, posts
+
+
+def test_brain_demo_refuses_a_second_run(tmp_path):
+    demo, made, _ = _brain(tmp_path)
+    assert demo.run()["ok"] is True
+    again = demo.run()
+    assert again["ok"] is False and "already running" in again["message"]
+    assert len(made) == 1
+    made[0].alive = False                      # the run ended by itself
+    assert demo.run()["ok"] is True and len(made) == 2
+
+
+def test_brain_demo_stop_kills_the_run_and_stops_the_arm(tmp_path):
+    demo, made, posts = _brain(tmp_path)
+    demo.run()
+    out = demo.stop()
+    assert out["was_running"] is True and out["arm_stop_sent"] is True
+    assert made[0].alive is False and not demo.running()
+    assert posts == ["http://127.0.0.1:8765/api/stop"]
+    assert demo.stop()["was_running"] is False      # stopping twice is harmless
+
+
+def test_brain_demo_state_shape(tmp_path):
+    page = {"truth": 10, "last_choice": 10, "confidence": 140, "refused": 2,
+            "arm": {"text": "Gowther, give me the sharpie", "agent": "gowther", "steps": ["pick sharpie", "hand_over"],
+                    "result": "handed_over"}}
+    demo, made, _ = _brain(tmp_path, page=page)
+    idle = demo.state()
+    assert idle["running"] is False and idle["log"] == [] and idle["page"] is None and idle["picture"] is None
+    demo.run()
+    (tmp_path / "last_handover_view.jpg").write_bytes(b"jpg")
+    s = demo.state()
+    assert s["running"] is True and s["page"] == page
+    assert s["log"][-1].endswith("right") and len(s["log"]) <= 12
+    assert s["picture"]["name"] == "last_handover_view.jpg"
+    made[0].alive = False
+    done = demo.state()
+    assert done["running"] is False and done["page"] is None and done["log"]      # the last result stays readable

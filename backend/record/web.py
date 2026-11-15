@@ -1,7 +1,11 @@
 """The charts page on 127.0.0.1:8766 and the JSON behind it."""
 import asyncio
+import json
 import statistics
+import subprocess
+import sys
 import time
+import urllib.request
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -87,7 +91,93 @@ def charts_data(store: Store, minutes: float = 60.0, now: float | None = None) -
     }
 
 
-def make_app(store: Store, collector=None) -> FastAPI:
+LOGS = ROOT / "backend" / "cache" / "logs"
+BRAIN_CMD = ["-u", "-m", "backend.brain", "gtec-run", "--subject", "1", "--live", "--targets", "sharpie"]
+BRAIN_PICTURES = ["last_wrist_aim_1_read.jpg", "last_handover_view.jpg"]
+
+
+def _launch_brain(log_path: Path):
+    """Start the brain demo as a hidden child of the record process. Its output goes to the log."""
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    out = open(log_path, "w", encoding="utf-8", errors="replace")
+    flags = 0x08000000 if sys.platform == "win32" else 0        # no console window
+    return subprocess.Popen([sys.executable] + BRAIN_CMD, cwd=str(ROOT), stdout=out, stderr=subprocess.STDOUT,
+                            creationflags=flags)
+
+
+def _fetch_json(url: str, timeout: float = 1.0):
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            return json.loads(r.read())
+    except Exception:  # noqa: BLE001 - the page it reads is only up while a run is going
+        return None
+
+
+def _post(url: str, timeout: float = 3.0) -> bool:
+    try:
+        urllib.request.urlopen(urllib.request.Request(url, data=b"", method="POST"), timeout=timeout).read()
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+class BrainDemo:
+    """The button on the page: runs the recorded g.tec brain signals through the decoder and on
+    to the agents and the real arm, one run at a time, and reports what the run is doing."""
+
+    def __init__(self, launcher=_launch_brain, log_path: Path | None = None, fetch=_fetch_json, post=_post,
+                 state_url: str = "http://127.0.0.1:8767/state", stop_url: str = "http://127.0.0.1:8765/api/stop",
+                 setup_dir: Path | None = None):
+        self.launcher, self.fetch, self.post = launcher, fetch, post
+        self.log_path = log_path or (LOGS / "gtec.log")
+        self.state_url, self.stop_url = state_url, stop_url
+        self.setup_dir = setup_dir or (ROOT / "setup")
+        self.proc = None
+        self.started = None
+
+    def running(self) -> bool:
+        return self.proc is not None and self.proc.poll() is None
+
+    def run(self) -> dict:
+        if self.running():
+            return {"ok": False, "message": "A brain demo is already running. Wait for it to finish, or press Stop."}
+        self.proc = self.launcher(self.log_path)
+        self.started = time.time()
+        return {"ok": True, "message": "Started. Nothing is sent for the first five seconds."}
+
+    def stop(self) -> dict:
+        was = self.running()
+        if was:
+            try:
+                self.proc.kill()
+            except Exception:  # noqa: BLE001
+                pass
+        self.proc = None
+        arm_stopped = self.post(self.stop_url)
+        return {"ok": True, "was_running": was, "arm_stop_sent": arm_stopped}
+
+    def log_lines(self, n: int = 12) -> list[str]:
+        try:
+            text = self.log_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return []
+        keep = [ln.rstrip() for ln in text.splitlines() if ln.strip() and "data_receiver.cpp" not in ln
+                and "netinterfaces.cpp" not in ln and "api_config.cpp" not in ln and "common.cpp" not in ln]
+        return [ln[:220] for ln in keep[-n:]]
+
+    def picture(self) -> Path | None:
+        found = [self.setup_dir / n for n in BRAIN_PICTURES if (self.setup_dir / n).is_file()]
+        return max(found, key=lambda p: p.stat().st_mtime) if found else None
+
+    def state(self) -> dict:
+        running = self.running()
+        pic = self.picture()
+        return {"running": running, "started": self.started, "log": self.log_lines(),
+                "page": self.fetch(self.state_url) if running else None,
+                "picture": None if pic is None else {"name": pic.name, "at": pic.stat().st_mtime}}
+
+
+def make_app(store: Store, collector=None, brain: BrainDemo | None = None) -> FastAPI:
     app = FastAPI(title="Phantom Claw record")
     if FONTS.exists():
         # mounted at the same relative place the page's CSS points to, so the page also
@@ -115,5 +205,26 @@ def make_app(store: Store, collector=None) -> FastAPI:
     @app.get("/api/panel")
     async def panel_only():
         return JSONResponse(await asyncio.to_thread(panel))
+
+    brain = brain or BrainDemo()
+
+    @app.post("/api/brain/run")
+    async def brain_run():
+        return JSONResponse(await asyncio.to_thread(brain.run))
+
+    @app.post("/api/brain/stop")
+    async def brain_stop():
+        return JSONResponse(await asyncio.to_thread(brain.stop))
+
+    @app.get("/api/brain/state")
+    async def brain_state():
+        return JSONResponse(await asyncio.to_thread(brain.state))
+
+    @app.get("/api/brain/picture")
+    async def brain_picture():
+        pic = brain.picture()
+        if pic is None:
+            return JSONResponse({"picture": None}, status_code=404)
+        return FileResponse(pic, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
     return app
