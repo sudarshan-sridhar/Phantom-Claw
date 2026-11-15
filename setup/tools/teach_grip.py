@@ -39,9 +39,9 @@ sys.path.insert(0, str(ROOT))
 SETUP = ROOT / "setup"
 OUT = SETUP / "grip_teach.json"
 NAMES = ["pan", "lift", "elbow", "wrist_flex", "wrist_roll", "gripper"]
-TIERS = ("tall", "can", "low")
+TIERS = ("tall", "can", "stick", "low")
 SPOTS = ("near", "middle", "far", "farthest")
-DEFAULT_OBJECT = {"tall": "water bottle", "can": "can", "low": "sharpie"}
+DEFAULT_OBJECT = {"tall": "water bottle", "can": "sanitizer", "stick": "glue stick", "low": "sharpie"}
 GRIP_RANGE = (1305, 2788)
 MAX_LIFT_TICKS = 300      # the lifted pose may differ from the grasp by at most this much shoulder lift
 VIA_LIFT = 150            # otherwise the pose above is the grasp with the shoulder this much higher
@@ -156,19 +156,15 @@ def main():
 
     bus = Bus(a.port)
     bus.read_all()
-    say(f"Teaching the {a.tier} grip, {a.spot} spot, on the {obj}. Hold the arm now. Torque goes off after the beep.")
-    time.sleep(3)
+    say(f"{obj}, {a.spot}. Hold the arm.")
+    time.sleep(1)
     beep(1000, 300)
     bus.torque_off()
     try:
-        grasp, s1 = hold_and_read(bus, f"Torque is off. Open the jaws around the {obj} where they should grip it, "
-                                       "and hold still.", a.wait)
-        shut, s2 = hold_and_read(bus, "Now squeeze the jaws shut on it by hand, and hold still.", a.wait * 0.6)
-        above, s3 = hold_and_read(bus, LIFT_SAY, a.wait * 0.6)
-        if not lifted_ok(grasp, above):
-            say(f"That is too far: the shoulder moved {abs(above['lift'] - grasp['lift'])} ticks from the grip, "
-                "so the arm was folded back. Put the jaws back on the object, then lift it only a hand's width.")
-            above, s3 = hold_and_read(bus, LIFT_SAY, a.wait * 0.8)
+        # Two holds only: jaws on it, then squeezed shut. The pose above is worked out from the grip.
+        grasp, s1 = hold_and_read(bus, "Jaws on it.", a.wait)
+        shut, s2 = hold_and_read(bus, "Squeeze.", a.wait * 0.6)
+        above, s3 = {**grasp, **via_from_grasp(grasp)}, 0
     finally:
         bus.close()
     via_taught = None

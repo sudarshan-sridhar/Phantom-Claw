@@ -18,12 +18,14 @@ import re
 
 from .gemini import parse_box
 
-TIERS = ("tall", "can", "low")
+TIERS = ("tall", "can", "stick", "low")
 
 # Known names pick the tier; Gemini's height guess is used only for names not listed here.
 # Checked in this order, so "juice bottle" is tall and "juice can" is can.
 _LOW_WORDS = ("sharpie", "marker", "pen", "pencil", "scissors", "scissor", "highlighter", "screwdriver", "spoon",
-              "fork", "knife", "chopstick", "brush", "earbud", "earphone", "airpod", "glue")
+              "fork", "knife", "chopstick", "brush", "earbud", "earphone", "airpod")
+_STICK_WORDS = ("glue",)                                  # a glue stick standing up: its own taught height
+_SANI_WORDS = ("sanitizer", "sanitiser", "hand gel", "sanitizing")   # the sanitizer bottle: the "can" height
 _CAN_WORDS = ("can", "red bull", "redbull", "cup", "mug", "glass", "tin")
 _TALL_WORDS = ("bottle", "flask", "thermos")
 _CAN_LATE = ("juice", "soda", "coke", "pepsi", "sprite", "drink")
@@ -89,7 +91,8 @@ def _has(name, words):
 
 def tier_for(name, height_guess=None):
     """(tier, where it came from): the known-name table first, then Gemini's height guess."""
-    for words, tier in ((_LOW_WORDS, "low"), (_CAN_WORDS, "can"), (_TALL_WORDS, "tall"), (_CAN_LATE, "can")):
+    for words, tier in ((_STICK_WORDS, "stick"), (_SANI_WORDS, "can"), (_LOW_WORDS, "low"), (_CAN_WORDS, "can"),
+                        (_TALL_WORDS, "tall"), (_CAN_LATE, "can")):
         if _has(name, words):
             return tier, "name"
     g = str(height_guess or "").strip().lower()
