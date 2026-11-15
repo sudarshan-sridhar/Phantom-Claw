@@ -2,8 +2,9 @@
 
 Every WebSocket event goes into `events` as it is. On top of that a request row is built
 from the request, merlin, say and arm events of one job, brain events also go into `brain`,
-and GET /api/status is polled once a second for the joint readings and for which LLM
-provider answered and how long it took.
+and GET /api/status is polled once a second for the joint readings, for which LLM
+provider and model answered each character and how long it took (a `replies` row per answer),
+and for which character holds the arm.
 """
 import asyncio
 import json
@@ -112,6 +113,45 @@ class Collector:
         self.connected = False
         self.events_seen = 0
         self.last_status_ok = None
+        self.arm_holder = None    # the character whose turn it is with the arm, if any
+        self.reply_at = {}        # agent -> "at" of the last answer already written to replies
+
+    def on_replies(self, by_agent: dict) -> None:
+        """Write one replies row for every answer not seen before. The server keeps only the
+        latest answer per character, so a new "at" means a new answer."""
+        for agent, info in (by_agent or {}).items():
+            if not isinstance(info, dict) or not info.get("provider"):
+                continue
+            at = info.get("at")
+            if not isinstance(at, (int, float)) or self.reply_at.get(agent) == at:
+                continue
+            if agent not in self.reply_at and self._already_recorded(agent, at):
+                # first look this run at an answer an earlier run of the record already wrote
+                self.reply_at[agent] = at
+                continue
+            self.reply_at[agent] = at
+            ms = info.get("ms")
+            self.store.add("replies", {"time": float(at), "agent": agent, "provider": info["provider"],
+                                       "model": info.get("model"), "fallback": bool(info.get("fallback")),
+                                       "reply_ms": int(ms) if isinstance(ms, (int, float)) else None})
+
+    def _already_recorded(self, agent: str, at: float) -> bool:
+        rows = self.store.select("replies", at - 0.01)
+        return any(r.get("agent") == agent and abs(r["time"] - at) < 0.01 for r in rows)
+
+    def on_status(self, st: dict) -> None:
+        """Everything taken from one GET /api/status answer."""
+        t = time.time()
+        joints = ((st.get("arm") or {}).get("joints")) or {}
+        for name, pos in joints.items():
+            if isinstance(pos, (int, float)):
+                self.store.add("joints", {"time": t, "joint": name, "position": float(pos)})
+        states = st.get("states")
+        if isinstance(states, dict):
+            self.arm_holder = next((a for a, s in states.items() if s == "has_arm"), None)
+        providers = st.get("providers") or {}
+        self.on_replies(providers.get("by_agent") or {})
+        self.tracker.on_providers(providers)
 
     def handle(self, ev: dict, t: float | None = None) -> None:
         t = time.time() if t is None else t
@@ -125,6 +165,12 @@ class Collector:
             v = ev.get("value")
             self.store.add("brain", {"time": t, "state": ev.get("state"),
                                      "value": float(v) if isinstance(v, (int, float)) else None})
+        elif kind == "agent_state" and ev.get("agent"):
+            # the status poll says the same once a second; the event says it sooner
+            if ev.get("state") == "has_arm":
+                self.arm_holder = ev["agent"]
+            elif self.arm_holder == ev["agent"]:
+                self.arm_holder = None
         self.tracker.on_event(ev, t)
 
     async def ws_loop(self) -> None:
@@ -161,17 +207,14 @@ class Collector:
             st = r.json()
         except (httpx.HTTPError, ValueError):
             self.last_status_ok = False
+            self.arm_holder = None   # with the server gone nobody holds the arm
             return
         finally:
             if own:
                 await client.aclose()
         self.last_status_ok = True
-        t = time.time()
-        joints = ((st.get("arm") or {}).get("joints")) or {}
-        for name, pos in joints.items():
-            if isinstance(pos, (int, float)):
-                self.store.add("joints", {"time": t, "joint": name, "position": float(pos)})
-        self.tracker.on_providers(st.get("providers") or {})
+        if isinstance(st, dict):
+            self.on_status(st)
 
     async def status_loop(self) -> None:
         async with httpx.AsyncClient(timeout=1.0) as client:

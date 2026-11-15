@@ -4,7 +4,7 @@ import time
 
 from backend.record.collector import Collector, outcome
 from backend.record.store import Store
-from backend.record.web import charts_data
+from backend.record.web import charts_data, panel_data
 
 
 def make_store(tmp_path):
@@ -96,6 +96,91 @@ def test_unreachable_tiger_falls_back_to_sqlite(tmp_path):
     assert st["configured"] == "tiger" and st["backend"] == "sqlite" and not st["ok"] and st["error"]
     assert st["buffered"]["brain"] == 0 and st["written"]["sqlite"]["brain"] == 1
     assert len(store.select("brain", 0)) == 1   # the charts read the local copy
+
+
+def status(by_agent=None, states=None):
+    """A fake GET /api/status answer."""
+    return {"arm": {"joints": {}}, "providers": {"last": None, "by_agent": by_agent or {}},
+            "states": states or {a: "idle" for a in ("escanor", "elizabeth", "ban", "king", "gowther", "merlin")}}
+
+
+def test_replies_table_added_to_an_old_database(tmp_path):
+    path = tmp_path / "old.sqlite"
+    db = sqlite3.connect(path)
+    db.execute("CREATE TABLE requests (time REAL, agent TEXT, text TEXT, provider TEXT, reply_ms INTEGER)")
+    db.execute("CREATE TABLE replies (time REAL, agent TEXT, provider TEXT)")   # an early half-made one
+    db.execute("INSERT INTO requests VALUES (1.0, 'ban', 'hi', 'gemini', 500)")
+    db.commit()
+    db.close()
+    store = Store(None, sqlite_path=path)
+    store.add("replies", {"time": 2.0, "agent": "ban", "provider": "openai", "model": "gpt-4o-mini",
+                          "fallback": True, "reply_ms": 640})
+    store.flush()
+    db = sqlite3.connect(path)
+    cols = {r[1] for r in db.execute("PRAGMA table_info(requests)")}
+    assert {"arm_skill", "arm_result", "arm_ms"} <= cols
+    assert {r[1] for r in db.execute("PRAGMA table_info(replies)")} == {"time", "agent", "provider", "model", "fallback", "reply_ms"}
+    assert db.execute("SELECT agent, model, fallback, reply_ms FROM replies").fetchall() == [("ban", "gpt-4o-mini", 1, 640)]
+    assert db.execute("SELECT text, provider FROM requests").fetchall() == [("hi", "gemini")]   # old rows kept
+
+
+def test_each_reply_recorded_once(tmp_path):
+    store = make_store(tmp_path)
+    col = Collector(store)
+    t = time.time() - 10
+    a = {"provider": "anthropic", "model": "claude-haiku-5-5", "fallback": False, "ms": 900, "errors": [], "at": t}
+    m = {"provider": "gemini", "model": "gemini-3.5-flash-lite", "fallback": False, "ms": 300, "errors": [], "at": t - 1}
+    for _ in range(3):   # the same answers seen on three polls
+        col.on_status(status({"escanor": a, "merlin": m}))
+    col.on_status(status({"escanor": {**a, "ms": 700, "at": t + 5}, "merlin": m}))
+    store.flush()
+    rows = store.select("replies", 0)
+    assert sorted((r["agent"], r["reply_ms"]) for r in rows) == [("escanor", 700), ("escanor", 900), ("merlin", 300)]
+    # a fresh record process sees the same latest answers again and does not write them twice
+    col2 = Collector(store)
+    col2.on_status(status({"escanor": {**a, "ms": 700, "at": t + 5}, "merlin": m}))
+    store.flush()
+    assert len(store.select("replies", 0)) == 3
+
+
+def test_panel_counts_fallbacks_and_shows_arm_holder(tmp_path):
+    store = make_store(tmp_path)
+    col = Collector(store)
+    now = time.time()
+    base = {"errors": [], "ms": 500}
+    col.on_status(status({"ban": {**base, "provider": "gemini", "model": "gemini-3.5-flash-lite", "fallback": False, "at": now - 60}}))
+    col.on_status(status({"ban": {**base, "provider": "openai", "model": "gpt-4o-mini", "fallback": True, "ms": 1200, "at": now - 30}},
+                         states={"ban": "has_arm", "king": "idle"}))
+    store.flush()
+    assert col.arm_holder == "ban"
+
+    d = panel_data(store, now=now, arm_holder=col.arm_holder, server_up=True)
+    assert [c["agent"] for c in d["characters"]] == ["escanor", "elizabeth", "ban", "king", "gowther", "merlin"]
+    ban = next(c for c in d["characters"] if c["agent"] == "ban")
+    assert ban["replies"] == 2 and ban["fallbacks"] == 1 and ban["holds_arm"]
+    assert ban["last"]["provider"] == "openai" and ban["last"]["model"] == "gpt-4o-mini"
+    assert ban["last"]["fallback"] is True and ban["last"]["ms"] == 1200 and 29 <= ban["last"]["ago_s"] <= 31
+    king = next(c for c in d["characters"] if c["agent"] == "king")
+    assert king["last"] is None and king["replies"] == 0 and not king["holds_arm"]
+    assert d["arm_holder"] == "ban" and d["server_up"] is True
+    # charts endpoint data and the panel share the store without getting in each other's way
+    assert "replies" in charts_data(store, now=now)
+
+
+def test_arm_holder_follows_events_and_clears_when_server_goes(tmp_path):
+    import asyncio
+    col = Collector(make_store(tmp_path), server="http://127.0.0.1:1")   # nothing listens on port 1
+    col.handle({"type": "agent_state", "agent": "king", "state": "has_arm"})
+    assert col.arm_holder == "king"
+    col.handle({"type": "agent_state", "agent": "ban", "state": "idle"})
+    assert col.arm_holder == "king"
+    col.handle({"type": "agent_state", "agent": "king", "state": "idle"})
+    assert col.arm_holder is None
+    col.arm_holder = "king"
+    asyncio.run(col.poll_once())
+    assert col.last_status_ok is False and col.arm_holder is None
+    d = panel_data(col.store, arm_holder=col.arm_holder, server_up=col.last_status_ok)
+    assert d["server_up"] is False and all(c["last"] is None for c in d["characters"])
 
 
 class FlakyTiger:

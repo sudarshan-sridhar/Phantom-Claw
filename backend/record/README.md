@@ -20,6 +20,11 @@ Options: `--server http://host:port` and `--port N`.
 | joints | time, joint, position |
 | requests | time, agent, text, provider, reply_ms, arm_skill, arm_result, arm_ms |
 | brain | time, state, value |
+| replies | time, agent, provider, model, fallback, reply_ms |
+
+One row in `replies` is one language model answer, taken from `providers.by_agent` in /api/status whenever a character's `at` changes. That includes Merlin's routing answers, which the server files under `merlin`. `fallback` is true when the character's own provider failed and the other one answered. The "Who is running what" panel at the top of the page is built from this table (last 24 hours): provider and model of each character's last answer, its reply time, how long ago, how many answers fell back, and which character holds the arm right now (from `states` in /api/status and the `agent_state` events). The same data is at /api/panel and under `panel` in /api/charts.
+
+On start, tables made by an older version get any missing columns added (ALTER TABLE ... ADD COLUMN IF NOT EXISTS on Tiger Data, PRAGMA table_info then ALTER TABLE on SQLite), and a missing table is created.
 
 One row in `requests` is one job. It is built from that job's request, merlin, say and arm events. `arm_result` is one of handed over, put back, missed, refused (the arm pointed or stopped halfway instead), done, stopped or error. Gestures while talking are not counted as arm jobs.
 
@@ -28,7 +33,7 @@ One row in `requests` is one job. It is built from that job's request, merlin, s
 Set `TIGER_DATABASE_URL` in the project's .env to the service's connection string (postgres://...). That is the only switch. With it set, the next start:
 
 1. connects with psycopg
-2. creates the four tables as hypertables with `CREATE TABLE ... WITH (tsdb.hypertable, tsdb.orderby = 'time DESC')`, falling back to `create_hypertable` on an older TimescaleDB, and to ordinary tables on plain PostgreSQL
+2. creates the five tables as hypertables with `CREATE TABLE ... WITH (tsdb.hypertable, tsdb.orderby = 'time DESC')`, falling back to `create_hypertable` on an older TimescaleDB, and to ordinary tables on plain PostgreSQL
 3. writes in batches every 2 s (joints arrive once a second per joint)
 
 The page footer says where rows are going. With the variable empty, rows go to backend\cache\record.sqlite with the same tables.
@@ -73,6 +78,19 @@ FROM requests
 WHERE provider IS NOT NULL
 GROUP BY minute, provider
 ORDER BY minute DESC;
+```
+
+Which model answered each character today, and how often the other provider had to step in:
+
+```sql
+SELECT agent, provider, model,
+       count(*)                                 AS answers,
+       count(*) FILTER (WHERE fallback)         AS fell_back,
+       percentile_cont(0.5) WITHIN GROUP (ORDER BY reply_ms) AS median_ms
+FROM replies
+WHERE time > date_trunc('day', now())
+GROUP BY agent, provider, model
+ORDER BY agent, answers DESC;
 ```
 
 Gripper position averaged per 5 seconds over the last 10 minutes, with gaps filled:

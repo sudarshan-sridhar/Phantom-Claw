@@ -1,5 +1,5 @@
 """Where the record goes: Tiger Data (PostgreSQL with TimescaleDB) when TIGER_DATABASE_URL is
-set, a local SQLite file when it is not. Same four tables either way.
+set, a local SQLite file when it is not. Same five tables either way.
 
 Rows are buffered in memory and written by a background thread, so a slow or missing
 database never holds up the WebSocket reader. If a write fails the rows stay in the buffer
@@ -30,6 +30,11 @@ TABLES = {
                  "provider": ("TEXT", "TEXT"), "reply_ms": ("INTEGER", "INTEGER"),
                  "arm_skill": ("TEXT", "TEXT"), "arm_result": ("TEXT", "TEXT"), "arm_ms": ("INTEGER", "INTEGER")},
     "brain": {"time": ("REAL", "TIMESTAMPTZ NOT NULL"), "state": ("TEXT", "TEXT"), "value": ("REAL", "DOUBLE PRECISION")},
+    # one row per language model answer, as the server reports it in /api/status providers.by_agent.
+    # time is when the answer came back. fallback is true when the character's own provider failed
+    # and the other one answered.
+    "replies": {"time": ("REAL", "TIMESTAMPTZ NOT NULL"), "agent": ("TEXT", "TEXT"), "provider": ("TEXT", "TEXT"),
+                "model": ("TEXT", "TEXT"), "fallback": ("INTEGER", "BOOLEAN"), "reply_ms": ("INTEGER", "INTEGER")},
 }
 MAX_BUFFERED = 200_000   # about an hour of joints at worst; past this the oldest go
 
@@ -46,6 +51,11 @@ class SQLiteDB:
             spec = ", ".join(f"{c} {t[0]}" for c, t in cols.items())
             self.conn.execute(f"CREATE TABLE IF NOT EXISTS {name} ({spec})")
             self.conn.execute(f"CREATE INDEX IF NOT EXISTS {name}_time ON {name} (time)")
+            # a file made by an older version may lack columns added since; add them empty
+            have = {r[1] for r in self.conn.execute(f"PRAGMA table_info({name})")}
+            for c, t in cols.items():
+                if c not in have:
+                    self.conn.execute(f"ALTER TABLE {name} ADD COLUMN {c} {t[0]}")
         self.conn.commit()
 
     def write(self, table: str, rows: list[dict]) -> None:
@@ -97,7 +107,7 @@ class PostgresDB:
             return False
 
     def _make_tables(self) -> bool:
-        """Create the four tables as hypertables. Tiger Data's own syntax first, then the
+        """Create the tables as hypertables. Tiger Data's own syntax first, then the
         older create_hypertable call, and on a plain PostgreSQL they stay ordinary tables."""
         self._exec("CREATE EXTENSION IF NOT EXISTS timescaledb")
         for name, cols in TABLES.items():
@@ -108,6 +118,11 @@ class PostgresDB:
             if not exists:
                 if not self._exec(f"CREATE TABLE {name} ({spec}) WITH (tsdb.hypertable, tsdb.orderby = 'time DESC')"):
                     self._exec(f"CREATE TABLE IF NOT EXISTS {name} ({spec})")
+            else:
+                # a table made by an older version may lack columns added since
+                for c, t in cols.items():
+                    if c != "time":
+                        self._exec(f"ALTER TABLE {name} ADD COLUMN IF NOT EXISTS {c} {t[1]}")
             self._exec("SELECT create_hypertable(%s, 'time', if_not_exists => TRUE, migrate_data => TRUE)", (name,))
             self._exec(f"CREATE INDEX IF NOT EXISTS {name}_time ON {name} (time DESC)")
         try:

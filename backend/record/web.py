@@ -13,7 +13,32 @@ from .store import ROOT, Store
 PAGE = Path(__file__).with_name("page.html")
 FONTS = ROOT / "overlay" / "assets" / "hd" / "fonts"
 AGENTS = ["escanor", "elizabeth", "ban", "king", "gowther"]
+CHARACTERS = AGENTS + ["merlin"]
 OUTCOMES = ["handed over", "put back", "missed", "refused", "done", "stopped", "error"]
+PANEL_HOURS = 24.0
+
+
+def panel_data(store: Store, now: float | None = None, hours: float = PANEL_HOURS,
+               arm_holder: str | None = None, server_up: bool | None = None) -> dict:
+    """Who is running what: per character, the provider and model of its last recorded answer,
+    how fast it was, and how many answers came from the other provider instead."""
+    now = time.time() if now is None else now
+    rows = store.select("replies", now - hours * 3600)
+    out = []
+    for a in CHARACTERS:
+        mine = sorted((r for r in rows if r.get("agent") == a), key=lambda r: r["time"])
+        last = mine[-1] if mine else None
+        out.append({
+            "agent": a,
+            "replies": len(mine),
+            "fallbacks": sum(1 for r in mine if r.get("fallback")),
+            "last": None if last is None else {
+                "provider": last.get("provider"), "model": last.get("model"),
+                "fallback": bool(last.get("fallback")), "ms": last.get("reply_ms"),
+                "at": last["time"], "ago_s": round(max(0.0, now - last["time"]), 1)},
+            "holds_arm": a == arm_holder,
+        })
+    return {"now": now, "hours": hours, "server_up": server_up, "arm_holder": arm_holder, "characters": out}
 
 
 def charts_data(store: Store, minutes: float = 60.0, now: float | None = None) -> dict:
@@ -73,12 +98,22 @@ def make_app(store: Store, collector=None) -> FastAPI:
     async def page():
         return FileResponse(PAGE, media_type="text/html")
 
+    def panel():
+        holder = getattr(collector, "arm_holder", None)
+        up = getattr(collector, "last_status_ok", None)
+        return panel_data(store, arm_holder=holder, server_up=up)
+
     @app.get("/api/charts")
     async def charts(minutes: float = 60.0):
         data = await asyncio.to_thread(charts_data, store, minutes)
+        data["panel"] = await asyncio.to_thread(panel)
         if collector is not None:
             data["server"] = {"websocket": collector.connected, "status_poll": collector.last_status_ok,
                               "events_seen": collector.events_seen}
         return JSONResponse(data)
+
+    @app.get("/api/panel")
+    async def panel_only():
+        return JSONResponse(await asyncio.to_thread(panel))
 
     return app
