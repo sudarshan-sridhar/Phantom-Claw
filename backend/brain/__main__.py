@@ -124,6 +124,7 @@ def main() -> None:
 
     gc = sub.add_parser("gtec-check", help="accuracy of our decoder on the g.tec SSVEP recordings")
     gc.add_argument("--data", type=Path, default=None)
+    gc.add_argument("--gate", action="store_true", help="also show what the confidence gate does, per recording")
 
     gr = sub.add_parser("gtec-run", help="replay a g.tec recording as a live stream, decode it, choose for the arm")
     gr.add_argument("--subject", type=int, default=1)
@@ -135,8 +136,13 @@ def main() -> None:
     gr.add_argument("--stream", default="GtecSSVEP", help="live stream name (a Unicorn headset's name with --no-replay)")
     gr.add_argument("--channels", type=int, default=8)
     gr.add_argument("--no-replay", action="store_true", help="read a real headset's stream instead of a file")
-    gr.add_argument("--server", default="http://127.0.0.1:8765")
-    gr.add_argument("--port", type=int, default=8767)
+    gr.add_argument("--server", default=None, help="agent server address (default http://127.0.0.1:<port>)")
+    gr.add_argument("--targets", default=None, help='play only these trials, in order: "sharpie" or "scissors,stop"')
+    gr.add_argument("--gap", type=float, default=12.0, help="seconds of no light between the chosen trials")
+    gr.add_argument("--gate", type=float, default=1.0, help="confidence gate: 1 calibrated, 0 off, above 1 stricter")
+    gr.add_argument("--evidence", type=Path, default=None, help="write every choice and what came back to this file")
+    gr.add_argument("--port", type=int, default=8765, help="port of the agent server the choices go to")
+    gr.add_argument("--page-port", type=int, default=8767, help="port of the status page")
     gr.add_argument("--seconds", type=float, default=None)
     gr.add_argument("--data", type=Path, default=None)
 
@@ -146,10 +152,14 @@ def main() -> None:
         data = args.data or gtec.DATA_DIR
         if args.cmd == "gtec-check":
             gtec.check(data)
+            if args.gate:
+                gtec.gate_table(data)
         else:
             gtec.run(subject=args.subject, session=args.session, live=args.live and not args.dry, speed=args.speed,
                      window_s=args.window, stream=args.stream, channels=args.channels, replay=not args.no_replay,
-                     server=args.server, port=args.port, seconds=args.seconds, data_dir=data)
+                     server=args.server or f"http://127.0.0.1:{args.port}", port=args.page_port,
+                     seconds=args.seconds, data_dir=data, gate=args.gate, evidence=args.evidence,
+                     targets=[s for s in (args.targets or "").split(",") if s.strip()] or None, gap_s=args.gap)
         return
     if args.cmd == "testsource":
         from .testsource import publish

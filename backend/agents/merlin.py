@@ -25,6 +25,9 @@ STEP_PARAMS = {"look": ("target",), "point_at": ("target", "pace"), "pick": ("ta
 MANNER_KEYS = ("pace", "approach", "lift_cm_style", "wait_s")
 # Extra items (not asked for) each one may touch in a desk plan, when the owner didn't say only.
 ARM_EXTRA_CAP = {"ban": 1, "elizabeth": 1, "escanor": 0, "king": 0, "gowther": 0}
+# The owner wants exactly what he asked for: no extra items unless the talkative mode is on.
+if __import__("os").environ.get("PHANTOM_CHATTER", "").strip() != "1":
+    ARM_EXTRA_CAP = {k: 0 for k in ARM_EXTRA_CAP}
 REACH_CM = (15.0, 45.0)     # an extra item must sit inside this ring to be worth reaching for
 TOOLS = set(tools.TOOLS)          # the registry in backend/tools is the one list
 SAY_MAX = 140

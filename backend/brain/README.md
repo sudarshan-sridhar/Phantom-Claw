@@ -192,33 +192,57 @@ The recordings go in `backend\brain\data\gtec_ssvep\` (four files named `subject
 
 Commands, from the project root:
 
-1. Accuracy on every trial of every file:
+1. Accuracy on every trial of every file, and what the confidence gate does:
 
-       python -m backend.brain gtec-check
+       python -m backend.brain gtec-check --gate
 
-2. Replay a session live and decode it. Nothing is sent to the arm:
+2. Replay a whole session live and decode it. Nothing is sent to the arm:
 
        python -m backend.brain gtec-run --subject 1
 
-   The page at http://127.0.0.1:8767/ shows the four lights, the one the person is looking at, what we decoded, and how many were right.
+   The page at http://127.0.0.1:8767/ shows the four targets, the one the person is looking at, what we decoded, the confidence against the gate, how many were right, how many moments the gate held back, and, once a request has gone out, which character took it, the arm steps and the result.
 
-3. The same, with the choices really sent to the running app (the arm moves):
+3. One choice at a time on the real app (the arm moves). This plays chosen trials from the recording in the order given: real trials, real pauses, our order.
+
+       python -m backend.brain gtec-run --subject 1 --live --targets sharpie
+       python -m backend.brain gtec-run --subject 1 --live --targets scissors,stop --gap 20
+
+   The first makes one request and lets the arm finish. The second asks for the scissors and, 20 seconds of no light later, plays a stop trial, which stops the arm in the middle of the job.
+
+4. A whole session sent to the app:
 
        python -m backend.brain gtec-run --subject 1 --live
 
-The limits that decide when a choice counts come from the same person's other session, never from the session being replayed. While the arm is on a job the next choice waits. A stop always goes out at once.
+   The lights in the file change every ten seconds and every fourth one is the stop, so on a real arm most jobs are cut short. Use step 3 for a demo.
 
-Measured with our decoder (guessing would give 25%):
+`--port` is the agent server's port (8765 by default), `--page-port` the status page's (8767), `--gate` the gate's strength (1 calibrated, 0 off, above 1 stricter), `--evidence FILE` writes every choice and what came back.
 
-| | One 3 s window per trial | Live replay |
-|---|---|---|
-| Subject 1 | 39 of 40 | 40 of 40 lights chosen right, one extra choice in a pause |
-| Subject 2 | 26 of 40 | weak: most lights get no choice |
+Rules it keeps, all tested:
+- The limits that decide when a choice counts come from the same person's other session, never from the session being replayed.
+- The gate: the arm only moves when the best target's score and its lead over the runner-up both pass those limits for four steps in a row. Anything else is held back and counted on the page.
+- Nothing is sent in the first five seconds.
+- One request at a time. A choice made while the arm is on a job is dropped, never queued.
+- A stop goes out at once, also while a job is running.
 
-Use subject 1 for a demo. Subject 2's recordings have noisy channels and our decoder does not cope with them.
+To try the whole chain with no robot: `python -m backend.brain.testserver` starts a second copy of the agent server on port 8775 with the pretend arm, then add `--port 8775` to the commands above.
 
-With a real g.tec Unicorn headset: start the Unicorn LSL app from the Unicorn Suite so the headset is on the network as a live stream, then
+Measured with our decoder, 3 s window, live rules, each whole session (guessing would give 25%; 40 lights per person):
 
-       python -m backend.brain gtec-run --no-replay --stream <the stream's name> --channels 8
+| | Gate off | Gate on | Gate at 1.5 |
+|---|---|---|---|
+| Subject 1, lights chosen right | 29 | 39 | 17 |
+| Subject 1, wrong moves | 21 | 1 | 0 |
+| Subject 1, lights with no move | 2 | 1 | 23 |
+| Subject 2, lights chosen right | 21 | 6 | 0 |
+| Subject 2, wrong moves | 29 | 6 | 0 |
+| Subject 2, lights with no move | 3 | 31 | 40 |
 
-This path has not been run, because no headset was available. The flicker lights would also be needed in front of the wearer at 9, 10, 12 and 15 Hz.
+A wrong move is a wrong target or a move while no light was on. Subject 1 decodes well. Subject 2 does not: with the gate on, the arm mostly stays still for that person, which is what the gate is for. One window per trial with no gate and no hold gives 39 of 40 for subject 1 and 27 of 40 for subject 2.
+
+End to end on the pretend arm (real models, real speed, subject 1 session 2, whole session): 20 lights, 19 decoded right, none wrong, one with no choice. Five stops and nine requests went out, six choices were dropped because the arm was busy, and three jobs were stopped part way by a stop light.
+
+With a real g.tec Unicorn headset: stream it with g.tec's Unicorn LSL app, then
+
+       python -m backend.brain gtec-run --no-replay --stream <stream name> --channels 8 --live
+
+The rest is the same code. This has not been run, since no headset was available.

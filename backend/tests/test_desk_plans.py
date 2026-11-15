@@ -386,7 +386,7 @@ def test_desk_question_answered_by_gowther_without_motion(monkeypatch):
     assert {e["skill"] for e in events if e["type"] == "arm"} <= {"gesture"}
     # where is one thing
     res = asyncio.run(_pipe(events, arm).handle("where is the cup", None, force_argue=False))
-    assert res["followups"][-1]["text"] == "The cup's 36 cm from the arm, to the left."
+    assert res["followups"][-1]["text"] == "The cup is on the desk, to the left."
 
 
 def test_stop_between_steps_ends_the_plan(monkeypatch):
