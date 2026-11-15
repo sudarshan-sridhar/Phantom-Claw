@@ -785,6 +785,21 @@ class RealArm:
                 return "hand"
         return None
 
+    def _still_holding(self, grip):
+        """True while the bottle is in the jaws. When the grip closes on the cap the gripper is told
+        to squeeze 70 ticks further than where it stopped, so if the bottle slips out the jaws
+        close in by that much. Seeing them well inside the grip position means it is gone."""
+        return self._rd(6, POSITION) > grip - 45
+
+    def _lost_the_bottle(self, k, plan, when):
+        """The bottle slipped out. Say so and go home; do not carry on and offer an empty hand."""
+        self._emit("missed")
+        self._emit("returning")
+        self._fetch_back_to_rest(k)
+        self._restore_base_torque()
+        self._emit("done")
+        return "missed", f"had the bottle, then lost it {when}. {plan['note']}"
+
     def _skill_fetch_bottle(self, pace, wait_s, look_first):
         k = S.fetch_stretch(pace)
         T = self.taught
@@ -822,8 +837,11 @@ class RealArm:
             self._emit("done")
             return "missed", f"the gripper closed on nothing. {plan['note']}"
         self._emit("gripped")
+        plan["note"] = f"gripped at {grip}. {plan['note']}"
         # lift and pull the bottle in close in one move: the base joint cannot swing a loaded arm held far out
         self._fblend(self._three(tuck, S.FETCH_TUCK_S * k), settle=False)
+        if not self._still_holding(grip):
+            return self._lost_the_bottle(k, plan, "during the lift")
         self._emit("lifted")
         turn = S.fetch_turn_s(pan_b, pan_p, pace)
         watcher = None
@@ -849,6 +867,8 @@ class RealArm:
                 self._emit("done")
                 return "turn_failed", (f"could not finish the turn ({e}) at pan {at}; the bottle is on the table "
                                        f"where the arm stopped. {plan['note']}")
+            if not self._still_holding(grip):
+                return self._lost_the_bottle(k, plan, "while carrying it")
             self._emit("offering")
             self._beep(900, 150)
             self._beep(900, 150)          # ready: pull it out of the jaws
