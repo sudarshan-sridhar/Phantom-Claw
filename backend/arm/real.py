@@ -451,30 +451,26 @@ class RealArm:
         a = ACC / max(1.0, k) * (LOAD_ACC_SCALE if loaded else 1.0)
         return max(MIN_LEG_ACC, int(a + 0.5))
 
-    def _level_wrist(self):
-        """Turn the wrist back to level if a pick or a handover left it turned. One slow glide."""
+    def _level_wrist(self, wait=True):
+        """Turn the wrist back to level if a pick or a handover left it turned. wait=False only
+        starts the turn, so it can happen while the arm folds home; a later call makes sure it
+        got there. The next job never starts with the wrist still turned."""
         try:
             off = abs(self._rd(5, POSITION) - ROLL_REST)
-            if off > 30:
-                self._go(5, ROLL_REST, 450, acc=8)
-                self._wait(min(1.6, 0.3 + off / 450.0))
+            if off <= 25:
+                return
+            self._go(5, ROLL_REST, 700, acc=10)
+            if not wait:
+                return
+            t0 = self._now()
+            while self._now() - t0 < 3.0:
+                self._wait(0.05)
+                if abs(self._rd(5, POSITION) - ROLL_REST) <= 25:
+                    return
         except _Stopped:
             raise
         except Exception:
             pass
-
-    def _level_wrist(self):
-        """Turn the wrist back to level if a pick or a handover left it turned. One slow glide."""
-        try:
-            off = abs(self._rd(5, POSITION) - ROLL_REST)
-            if off > 30:
-                self._go(5, ROLL_REST, 450, acc=8)
-                self._wait(min(1.6, 0.3 + off / 450.0))
-        except _Stopped:
-            raise
-        except Exception:
-            pass
-
     def _leg_back(self, dur, roll=None, acc=ACC):
         """Back to rest: all start together, the shoulder gets back early, the elbow finishes the fold.
         The gripper closes in the last 40 percent, unless it is squeezing something."""
@@ -483,6 +479,8 @@ class RealArm:
         holding = self._gripper_holding()
         if not holding:
             items.append((6, CLOSED, 0.6 * dur, 0.4 * dur))
+        if roll is None:
+            self._level_wrist(wait=False)
         if roll is not None:
             items.append((5, roll, 0, dur))
         self._blend(items, settle=False, acc=acc)
@@ -590,6 +588,9 @@ class RealArm:
                         keep = self._carry and skill in ("place", "hand_over")   # carrying: start from the carry pose
                         if skill != "rest" and not keep and not self._at_rest_now():
                             auto = self._auto_rest()
+                        if not keep and skill not in ("gesture", "wave"):
+                            # never start a job with the wrist still turned from the last one
+                            self._level_wrist()
                     out = getattr(self, "_skill_" + skill)(**p)
                     res, detail = out[0], out[1]
                     extra = out[2] if len(out) > 2 else {}
@@ -818,6 +819,7 @@ class RealArm:
     def _fetch_back_to_rest(self, k, acc=ACC):
         """back_to_rest() from the script: one move, the gripper closes in the last 40 percent."""
         d = S.FETCH_REST_S * k
+        self._level_wrist(wait=False)
         self._fblend([(3, self.REST[3], 0, d), (2, self.REST[2], 0, (1 - LEAD) * d), (1, self.REST[1], 0, d),
                       (4, self.REST[4], 0, d), (6, CLOSED, 0.6 * d, 0.4 * d)], settle=False, acc=acc)
         self._level_wrist()
