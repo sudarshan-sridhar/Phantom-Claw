@@ -11,6 +11,7 @@
 The arm only uses these calls, so tests can pass any object with the same methods.
 """
 import math
+import os
 from pathlib import Path
 
 from . import cameras, gemini
@@ -23,7 +24,7 @@ __all__ = ["Vision", "TableMap", "Taught", "GripTier", "load_tiers", "parse_box"
 
 OVERHEAD_PROMPT = (
     "This is a photo of a desk from above. Find (1) the clear plastic water bottle standing on the desk and "
-    "(2) the owner: the person standing or sitting right at the edge of the desk, on any side of it, nearest the robot arm (if there are several people, the one closest to the desk; a hand held out toward the desk is the owner's) (body, arm, hand or lap; ignore the robot arm). "
+    "(2) the owner: the person wearing a black sweater (dark top), wherever they stand or sit around the desk; never anyone else (body, arm, hand or lap; ignore the robot arm). "
     'Reply with JSON only: {"bottle": [ymin, xmin, ymax, xmax] or null, "person": [ymin, xmin, ymax, xmax] or null} '
     "with each box in 0 to 1000 units of the image height and width.")
 
@@ -122,6 +123,29 @@ def pin_down(img, item, table, asked=None):
     return item
 
 
+OWNER = "the person wearing a black sweater"
+
+
+def find_owner(img, table, who=None):
+    """Where the owner is around the desk, from the stronger model, so the arm turns to the right
+    person and not to whoever else is in the room. Returns the same dict as place_person, or None."""
+    who = who or os.environ.get("PHANTOM_OWNER") or OWNER
+    q = (f"This is a photo of a desk from above. Several people may be around it. Find {who}. "
+         "Box the part of them nearest the desk (hand, arm or body). If that person is not in the picture, say null. "
+         'Reply with JSON only: {"person": [ymin, xmin, ymax, xmax] or null} in 0 to 1000 units of the image '
+         "height and width.")
+    old = gemini.CLAUDE_VISION
+    try:
+        gemini.CLAUDE_VISION = PIN_MODEL
+        raw = gemini.ask_claude(img, q, timeout=8.0)
+        box = parse_box(raw.get("person"))
+        return table.place_person(box) if box else None
+    except Exception:
+        return None
+    finally:
+        gemini.CLAUDE_VISION = old
+
+
 class Vision:
     def __init__(self, setup_dir=None, overhead_index=cameras.OVERHEAD_INDEX, wrist_index=cameras.WRIST_INDEX):
         d = Path(setup_dir) if setup_dir else cameras.SETUP
@@ -165,6 +189,9 @@ class Vision:
         out = in_grid(parse_scene(raw, self.table, want=name), self.table)
         if name and out.get("match") is not None:
             pin_down(img, out["match"], self.table, asked=name)
+            me = find_owner(img, self.table)
+            if me is not None:
+                out["person"] = me
         out["markers_used"] = self.markers_used
         self.last_scene = out
         return out

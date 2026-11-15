@@ -5,61 +5,64 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Phantom Claw Record</title>
 <style>
+  @font-face { font-family: "Aseina"; src: url("../../overlay/assets/hd/fonts/Aseina-Typeface.woff2") format("woff2"); font-display: block; }
+  @font-face { font-family: "KC Obra"; src: url("../../overlay/assets/hd/fonts/KCObraLetraRegular.woff2") format("woff2"); font-display: block; }
+  @font-face { font-family: "IM Fell SC"; src: url("../../overlay/assets/hd/fonts/IMFellEnglishSC-Regular.woff2") format("woff2"); font-display: block; }
 
   :root {
-    --sea: #4b6359; --line: #d8d2c4; --soft: #f6f3ec;
+    --sea: #4b6359;
     --sand: #d9c5a3;
     --lilac: #b0afc8;
     --ink: #000;
     --paper: #fff;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { background: var(--soft); color: #1c1c1c; }
-  body { font-family: "Segoe UI", system-ui, -apple-system, Arial, sans-serif; min-height: 100vh; }
+  html, body { background: var(--sea); color: var(--paper); }
+  body { font-family: "KC Obra", Georgia, serif; min-height: 100vh; }
 
-  header { background: var(--sea);
+  header {
     display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 24px;
-    padding: 28px 32px 20px; border-bottom: 1px solid var(--line);
+    padding: 28px 32px 20px; border-bottom: 3px solid var(--ink);
   }
-  h1 { font-family: "Segoe UI", system-ui, -apple-system, Arial, sans-serif; font-weight: normal; font-size: 30px; font-weight: 600; line-height: 1.1; color: var(--paper); }
-  .sub { opacity: .85; font-family: "Segoe UI", system-ui, -apple-system, Arial, sans-serif; font-size: 18px; margin-top: 4px; color: var(--paper); }
-  .tally { display: flex; gap: 0; border: 1px solid var(--line); }
-  .tally div { padding: 8px 18px 10px; background: var(--paper); color: #1c1c1c; border-right: 1px solid var(--line); min-width: 120px; }
-  .tally div:last-child { border-right: 0; }
-  .tally b { display: block; font-family: "Segoe UI", system-ui, -apple-system, Arial, sans-serif; font-weight: normal; font-size: 34px; font-weight: 600; line-height: 1.1; }
-  .tally span { font-family: "Segoe UI", system-ui, -apple-system, Arial, sans-serif; font-size: 15px; }
+  h1 { font-family: "Aseina", Georgia, serif; font-weight: normal; font-size: clamp(44px, 7vw, 96px); line-height: .9; color: var(--sand); }
+  .sub { font-family: "IM Fell SC", Georgia, serif; font-size: 18px; letter-spacing: .04em; margin-top: 8px; color: var(--paper); }
+  .tally { display: flex; gap: 0; border: 3px solid var(--ink); }
+  .tally div { padding: 8px 18px 10px; background: var(--sand); color: var(--ink); border-right: 3px solid var(--ink); min-width: 120px; }
+  .tally div:last-child { border-right: 0; background: var(--lilac); }
+  .tally b { display: block; font-family: "Aseina", Georgia, serif; font-weight: normal; font-size: 54px; line-height: 1; }
+  .tally span { font-family: "IM Fell SC", Georgia, serif; font-size: 15px; }
 
-  main { display: grid; grid-template-columns: repeat(12, 1fr); gap: 0; max-width: 1400px; margin: 0 auto; }
-  section { background: var(--paper); color: var(--ink); border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 16px 18px 14px; min-width: 0; }
-  section.alt { background: var(--paper); }
+  main { display: grid; grid-template-columns: repeat(12, 1fr); gap: 0; }
+  section { background: var(--sand); color: var(--ink); border-right: 3px solid var(--ink); border-bottom: 3px solid var(--ink); padding: 16px 18px 14px; min-width: 0; }
+  section.alt { background: var(--lilac); }
   .w4 { grid-column: span 4; } .w8 { grid-column: span 8; } .w12 { grid-column: span 12; border-right: 0; }
   .w8 { border-right: 0; }
-  h2 { font-family: "Segoe UI", system-ui, -apple-system, Arial, sans-serif; font-weight: 600; font-size: 18px; line-height: 1.2; }
-  .note { font-family: "Segoe UI", system-ui, -apple-system, Arial, sans-serif; font-size: 15px; margin: 4px 0 10px; }
+  h2 { font-family: "Aseina", Georgia, serif; font-weight: normal; font-size: 30px; line-height: 1; }
+  .note { font-family: "IM Fell SC", Georgia, serif; font-size: 15px; margin: 4px 0 10px; }
   canvas { display: block; width: 100%; }
 
   .who-wrap { overflow-x: auto; }
-  table.who { width: 100%; border-collapse: collapse; font-family: "Segoe UI", system-ui, -apple-system, Arial, sans-serif; font-size: 17px; }
-  table.who th { font-family: "Segoe UI", system-ui, -apple-system, Arial, sans-serif; font-weight: normal; font-size: 15px; text-align: left;
-                 border-bottom: 1px solid var(--line); padding: 4px 12px 6px 0; white-space: nowrap; }
+  table.who { width: 100%; border-collapse: collapse; font-family: "KC Obra", Georgia, serif; font-size: 17px; }
+  table.who th { font-family: "IM Fell SC", Georgia, serif; font-weight: normal; font-size: 15px; text-align: left;
+                 border-bottom: 3px solid var(--ink); padding: 4px 12px 6px 0; white-space: nowrap; }
   table.who td { border-bottom: 1px solid var(--ink); padding: 7px 12px 7px 0; vertical-align: baseline; white-space: nowrap; }
   table.who tr:last-child td { border-bottom: 0; }
   table.who td.num { font-variant-numeric: tabular-nums; }
-  table.who .name { font-family: "Segoe UI", system-ui, -apple-system, Arial, sans-serif; font-size: 17px; font-weight: 600; }
+  table.who .name { font-family: "Aseina", Georgia, serif; font-size: 24px; }
   table.who .sw { display: inline-block; width: 12px; height: 12px; border: 1px solid var(--ink); margin-right: 8px; }
-  table.who .none { font-family: "Segoe UI", system-ui, -apple-system, Arial, sans-serif; }
-  table.who .arm { background: var(--ink); color: var(--paper); padding: 0 6px; font-family: "Segoe UI", system-ui, -apple-system, Arial, sans-serif; font-size: 15px; }
-  .who-state { font-family: "Segoe UI", system-ui, -apple-system, Arial, sans-serif; font-size: 15px; margin-top: 10px; }
+  table.who .none { font-family: "IM Fell SC", Georgia, serif; }
+  table.who .arm { background: var(--ink); color: var(--paper); padding: 0 6px; font-family: "IM Fell SC", Georgia, serif; font-size: 15px; }
+  .who-state { font-family: "IM Fell SC", Georgia, serif; font-size: 15px; margin-top: 10px; }
   .who-state .bad { background: var(--ink); color: var(--paper); padding: 0 6px; }
 
-  footer { display: flex; flex-wrap: wrap; gap: 6px 28px; padding: 12px 32px 24px; font-family: "Segoe UI", system-ui, -apple-system, Arial, sans-serif; font-size: 15px; }
+  footer { display: flex; flex-wrap: wrap; gap: 6px 28px; padding: 12px 32px 24px; font-family: "IM Fell SC", Georgia, serif; font-size: 15px; }
   footer .bad { background: var(--ink); color: var(--paper); padding: 0 6px; }
 
   #tip { position: fixed; pointer-events: none; display: none; background: var(--paper); color: var(--ink);
-         border: 1px solid var(--line); padding: 6px 9px; font-family: "Segoe UI", system-ui, -apple-system, Arial, sans-serif; font-size: 15px; max-width: 280px; z-index: 5; }
+         border: 2px solid var(--ink); padding: 6px 9px; font-family: "KC Obra", Georgia, serif; font-size: 15px; max-width: 280px; z-index: 5; }
 
   @media (max-width: 900px) {
-    header { background: var(--sea); grid-template-columns: 1fr; padding: 20px 16px 16px; }
+    header { grid-template-columns: 1fr; padding: 20px 16px 16px; }
     .tally div { min-width: 0; flex: 1; padding: 6px 10px 8px; }
     .tally b { font-size: 38px; }
     .w4, .w8, .w12 { grid-column: span 12; border-right: 0; }
@@ -72,17 +75,17 @@
 <header>
   <div>
     <h1>Phantom Claw</h1>
-    <div class="sub">The record: Jobs, replies and arm joints, stored in Tiger Data</div>
+    <div class="sub">The record: every job, every reply, every joint</div>
   </div>
   <div class="tally">
-    <div><b id="n-req">0</b><span>requests, last hour</span></div>
-    <div><b id="n-arm">0</b><span>arm jobs</span></div>
+    <div><b id="n-req">0</b><span>things you asked for, last hour</span></div>
+    <div><b id="n-arm">0</b><span>times the arm moved for you</span></div>
   </div>
 </header>
 <main>
   <section class="w12 alt" id="who">
     <h2>Who is running what</h2>
-    <p class="note">The language model behind each character, from the last answer it gave. Fell back counts answers that came from the other provider because the usual one failed.</p>
+    <p class="note">Which AI model answered for each character the last time it spoke. Reply time is how long that answer took. Fell back means its usual model failed and another one answered instead. The black tag marks who is using the arm right now.</p>
     <div class="who-wrap">
       <table class="who">
         <thead><tr><th>Character</th><th>Provider</th><th>Model</th><th>Reply time</th><th>When</th><th>Fell back</th><th>Arm</th></tr></thead>
@@ -91,10 +94,10 @@
     </div>
     <p class="who-state" id="who-state"></p>
   </section>
-  <section class="w4"><h2>Jobs taken</h2><p class="note">Requests each character took, last hour</p><canvas id="c-jobs" data-h="250"></canvas></section>
-  <section class="w8"><h2>Arm jobs</h2><p class="note">How long each one took and how it ended. The black bar is the middle value.</p><canvas id="c-arm" data-h="250"></canvas></section>
-  <section class="w4 alt"><h2>Reply time</h2><p class="note">How long each language model took to answer</p><canvas id="c-reply" data-h="250"></canvas></section>
-  <section class="w8 alt"><h2>Joints</h2><p class="note">The six joint readings over the last minute, in motor steps</p><canvas id="c-joints" data-h="250"></canvas></section>
+  <section class="w4"><h2>Jobs taken</h2><p class="note">How many of your requests each character handled in the last hour. A longer bar means that character did more.</p><canvas id="c-jobs" data-h="250"></canvas></section>
+  <section class="w8"><h2>Arm jobs</h2><p class="note">Each mark is one arm job: how many seconds it took, and whether the item was handed over, put back, or missed. The black bar is the typical time.</p><canvas id="c-arm" data-h="250"></canvas></section>
+  <section class="w4 alt"><h2>Reply time</h2><p class="note">Seconds from your request to the first answer, for each AI model. Lower is quicker.</p><canvas id="c-reply" data-h="250"></canvas></section>
+  <section class="w8 alt"><h2>Joints</h2><p class="note">Where each of the arm's six motors was over the last minute. Flat lines mean the arm is still; moving lines are a job in progress.</p><canvas id="c-joints" data-h="250"></canvas></section>
 </main>
 <footer id="foot"></footer>
 <div id="tip"></div>
@@ -104,10 +107,10 @@ const COLORS = { escanor: "#F5A623", elizabeth: "#8ECAE6", ban: "#C1121F", king:
 const NAMES = { escanor: "Escanor", elizabeth: "Elizabeth", ban: "Ban", king: "King", gowther: "Gowther", merlin: "Merlin" };
 const AGENTS = ["escanor", "elizabeth", "ban", "king", "gowther"];
 const INK = "#000", LILAC = "#b0afc8", SAND = "#d9c5a3", PAPER = "#fff";
-const LABEL = '15px "Segoe UI", system-ui, -apple-system, Arial, sans-serif';
-const SMALL = '13px "Segoe UI", system-ui, -apple-system, Arial, sans-serif';
-const BODY = '15px "Segoe UI", system-ui, -apple-system, Arial, sans-serif';
-const BIG = '30px "Segoe UI", system-ui, -apple-system, Arial, sans-serif';
+const LABEL = '15px "IM Fell SC", Georgia, serif';
+const SMALL = '13px "IM Fell SC", Georgia, serif';
+const BODY = '15px "KC Obra", Georgia, serif';
+const BIG = '30px "Aseina", Georgia, serif';
 
 // Hit boxes per canvas so hovering a mark can say what it is.
 const hits = new Map();
@@ -171,7 +174,7 @@ function drawJobs(d) {
     g.fillStyle = LILAC; g.fillRect(left, by, w - left - right, bh);
     const bw = (w - left - right) * j.count / max;
     if (j.count) { g.fillStyle = COLORS[j.agent]; g.fillRect(left, by, bw, bh); g.strokeStyle = INK; g.lineWidth = 2; g.strokeRect(left + 1, by + 1, bw - 2, bh - 2); }
-    text(g, String(j.count), left + bw + 8, by + bh / 2 + 2, '24px "Segoe UI", system-ui, -apple-system, Arial, sans-serif', "left", INK, "middle");
+    text(g, String(j.count), left + bw + 8, by + bh / 2 + 2, '24px "Aseina", Georgia, serif', "left", INK, "middle");
     k.hit(0, y, w, rowH, `${NAMES[j.agent]}: ${j.count} request${j.count === 1 ? "" : "s"}`);
   });
 }
@@ -258,7 +261,7 @@ function drawJoints(d) {
     const px = ox + 6, py = oy + 28, pw = cw - 16, ph = ch - 46;
     const X = t => px + pw * (t + 60) / 60, Y = v => py + ph - ph * (v - lo) / (hi - lo);
     text(g, name.replace("_", " "), px, oy + 16, SMALL);
-    text(g, String(Math.round(vals[vals.length - 1])), px + pw, oy + 18, '20px "Segoe UI", system-ui, -apple-system, Arial, sans-serif', "right");
+    text(g, String(Math.round(vals[vals.length - 1])), px + pw, oy + 18, '20px "Aseina", Georgia, serif', "right");
     g.strokeStyle = INK; g.lineWidth = 1; g.strokeRect(px + .5, py + .5, pw, ph);
     g.strokeStyle = INK; g.lineWidth = 2; g.beginPath();
     pts.forEach((p, n) => n ? g.lineTo(X(p[0]), Y(p[1])) : g.moveTo(X(p[0]), Y(p[1])));
@@ -299,10 +302,10 @@ function drawBrain(d) {
   g.stroke();
   if (focus.length) {
     const last = focus[focus.length - 1], s = last[1].toFixed(2);
-    g.font = '22px "Segoe UI", system-ui, -apple-system, Arial, sans-serif';
+    g.font = '22px "Aseina", Georgia, serif';
     const tw = g.measureText(s).width, lx = Math.min(X(last[0]) + 8, w - right - tw - 8), ly = Math.max(top + 4, Y(last[1]) - 34);
     g.fillStyle = PAPER; g.fillRect(lx - 4, ly, tw + 8, 26); g.strokeStyle = INK; g.lineWidth = 1.5; g.strokeRect(lx - 4, ly, tw + 8, 26);
-    text(g, s, lx, ly + 21, '22px "Segoe UI", system-ui, -apple-system, Arial, sans-serif');
+    text(g, s, lx, ly + 21, '22px "Aseina", Georgia, serif');
   }
 }
 

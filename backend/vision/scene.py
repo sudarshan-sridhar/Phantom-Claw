@@ -53,7 +53,7 @@ _SYNONYMS = {
 SCENE_PROMPT = (
     "This is a photo of a desk from above. List every separate object on the desk. Ignore the robot arm "
     "(its links, gripper and cable) and the square black-and-white paper markers taped to the desk. "
-    "Also find the owner: the person standing or sitting right at the edge of the desk, on any side of it, nearest the robot arm (if there are several people, the one closest to the desk; a hand held out toward the desk is the owner's). Box their body, arm, hand or lap.\n"
+    "Also find the owner: the person wearing a black sweater (dark top), wherever they stand or sit around the desk; never anyone else. Box their body, arm, hand or lap.\n"
     "For each object give:\n"
     '- "name": a short plain label of one to three words, such as "water bottle", "red bull can", "cup", '
     '"sharpie", "scissors";\n'
