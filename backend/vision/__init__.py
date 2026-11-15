@@ -146,6 +146,17 @@ def find_owner(img, table, who=None):
         gemini.CLAUDE_VISION = old
 
 
+def owner_side(table):
+    """Where to hold things out when the camera cannot see the owner: the side named in
+    PHANTOM_OWNER_SIDE (left or right), 60 degrees round from straight ahead."""
+    side = (os.environ.get("PHANTOM_OWNER_SIDE") or "").strip().lower()
+    if side not in ("left", "right"):
+        return None
+    deg = -60.0 if side == "left" else 60.0
+    return {"box": None, "x_cm": 0.0, "y_cm": 0.0, "bearing": deg,
+            "pan": int(round(table.pan_for_bearing(math.radians(deg)))), "assumed": side}
+
+
 class Vision:
     def __init__(self, setup_dir=None, overhead_index=cameras.OVERHEAD_INDEX, wrist_index=cameras.WRIST_INDEX):
         d = Path(setup_dir) if setup_dir else cameras.SETUP
@@ -190,6 +201,8 @@ class Vision:
         if name and out.get("match") is not None:
             pin_down(img, out["match"], self.table, asked=name)
             me = find_owner(img, self.table)
+            if me is None:
+                me = owner_side(self.table)
             if me is not None:
                 out["person"] = me
         out["markers_used"] = self.markers_used

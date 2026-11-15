@@ -6,6 +6,7 @@ from setup/bottle_teach.json and blends them by distance. Both are the maths fro
 setup/tools/fetch_bottle.py, unchanged.
 """
 import json
+import os
 import math
 from pathlib import Path
 
@@ -65,6 +66,10 @@ class TableMap:
             ymin, xmin, ymax, xmax = p
             tx, ty = self.to_table((xmin + xmax) / 2 * sx, (ymin + ymax) / 2 * sy)
             a = math.atan2(tx - self.base[0], ty - self.base[1])
+            out["person"] = {"bearing_deg": math.degrees(a), "pan": self.pan_for_bearing(a)}
+        side = (os.environ.get("PHANTOM_OWNER_SIDE") or "").strip().lower()
+        if side in ("left", "right"):
+            a = math.radians(-60.0 if side == "left" else 60.0)     # the owner said which side they stand on
             out["person"] = {"bearing_deg": math.degrees(a), "pan": self.pan_for_bearing(a)}
         return out
 
