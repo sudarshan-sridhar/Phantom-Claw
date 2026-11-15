@@ -202,7 +202,48 @@ def resolve_app(name: str, dirs: list[Path] | None = None) -> dict | None:
     p = find_shortcut(spoken, dirs)
     if p:
         return {"target": str(p), "how": "shortcut", "label": p.stem}
+    if dirs is None:
+        app = find_start_app(spoken)
+        if app:
+            return {"target": "shell:AppsFolder\\" + app[1], "how": "app", "label": app[0]}
     return None
+
+
+_START_APPS: list[tuple[str, str]] | None = None
+
+
+def list_start_apps() -> list[tuple[str, str]]:
+    """Every app Windows lists in Start, as (name, app id). This is how Store apps such as
+    WhatsApp are found: they have no shortcut file and no exe on the path."""
+    global _START_APPS
+    if _START_APPS is None:
+        import json
+        import subprocess
+
+        apps: list[tuple[str, str]] = []
+        try:
+            out = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", "Get-StartApps | ConvertTo-Json -Compress"],
+                capture_output=True, text=True, timeout=20, creationflags=0x08000000).stdout
+            rows = json.loads(out or "[]")
+            if isinstance(rows, dict):
+                rows = [rows]
+            apps = [(str(r.get("Name") or ""), str(r.get("AppID") or "")) for r in rows if r.get("AppID")]
+        except Exception:  # noqa: BLE001 - no list just means no match
+            apps = []
+        _START_APPS = apps
+    return _START_APPS
+
+
+def find_start_app(spoken: str, cutoff: float = 0.78) -> tuple[str, str] | None:
+    best, best_score = None, cutoff
+    for name, app_id in list_start_apps():
+        if _SKIP_WORDS.search(name):
+            continue
+        s = _score(spoken, _norm(name))
+        if s > best_score:
+            best, best_score = (name, app_id), s
+    return best
 
 
 def _launch(tool: str, target: str, label: str, **extra) -> dict:

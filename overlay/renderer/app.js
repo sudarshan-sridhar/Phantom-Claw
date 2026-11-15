@@ -408,22 +408,11 @@ const App = (() => {
       this.dots.classList.toggle('hidden', this.state !== 'thinking');
     }
 
-    // Come forward to a clear spot with room for a bubble.
+    // The one who is working or speaking stays where it is on the edge of the screen. Its
+    // scroll opens toward the middle, so nothing has to walk into the owner's work.
     comeForward() {
-      if (this.forward && !this.move) return;
       this.forward = true;
-      const upper = this.def.habit === 'float';
-      const minY = this.h + 190;
-      const spot = clearSpot(this, () => {
-        const b = bounds(this);
-        const x = clamp(W * rand(0.16, 0.84), b.left, b.right);
-        const y = upper ? clamp(H * rand(0.34, 0.52), minY, b.floor) : clamp(H * rand(0.52, 0.86), minY, b.floor);
-        return { x, y, kind: 'free' };
-      }, 280);
-      // Prefer a spot not too far away.
-      this.travel(spot, true);
     }
-
     // Start a trip to a spot, in this pet's own way of moving.
     travel(to, quick) {
       const from = { x: this.x, y: this.y };
@@ -438,7 +427,7 @@ const App = (() => {
       let dur = d / speed;
       if (quick) dur = Math.min(dur, style === 'leap' ? 0.9 : 1.4);
       dur = Math.max(dur, style === 'leap' ? 0.35 : 0.3);
-      this.move = { from, to, style, t0: now(), dur, apex: style === 'leap' ? clamp(d * 0.28, 40, 220) : 0 };
+      this.move = { from, to, style, t0: now(), dur, apex: 0 };
       if (Math.abs(to.x - from.x) > 4) this.facing = to.x > from.x ? 1 : -1;
       this.sleeping = false;
       this.refreshClasses();
