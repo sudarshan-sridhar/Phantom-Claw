@@ -1,4 +1,4 @@
-﻿"""Everything on the desk from one overhead picture and one Gemini call.
+"""Everything on the desk from one overhead picture and one Gemini call.
 
 Pure code: the prompt, the parser for Gemini's answer and the name matching. The camera and the
 network live in backend.vision.Vision.scene(), so tests can feed a canned answer straight in.
@@ -51,7 +51,7 @@ _SYNONYMS = {
 SCENE_PROMPT = (
     "This is a photo of a desk from above. List every separate object on the desk. Ignore the robot arm "
     "(its links, gripper and cable) and the square black-and-white paper markers taped to the desk. "
-    "Also find the person at the edge of the picture (body, arm, hand or lap).\n"
+    "Also find the owner: the person sitting next to the laptop computer (if there are several people, only that one; never anyone else). Box their body, arm, hand or lap.\n"
     "For each object give:\n"
     '- "name": a short plain label of one to three words, such as "water bottle", "red bull can", "cup", '
     '"sharpie", "scissors";\n'

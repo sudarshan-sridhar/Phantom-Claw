@@ -23,7 +23,7 @@ __all__ = ["Vision", "TableMap", "Taught", "GripTier", "load_tiers", "parse_box"
 
 OVERHEAD_PROMPT = (
     "This is a photo of a desk from above. Find (1) the clear plastic water bottle standing on the desk and "
-    "(2) the person sitting at the edge of the picture (body, arm, hand or lap; ignore the robot arm). "
+    "(2) the owner: the person sitting next to the laptop computer (if there are several people, only that one; never anyone else) (body, arm, hand or lap; ignore the robot arm). "
     'Reply with JSON only: {"bottle": [ymin, xmin, ymax, xmax] or null, "person": [ymin, xmin, ymax, xmax] or null} '
     "with each box in 0 to 1000 units of the image height and width.")
 
