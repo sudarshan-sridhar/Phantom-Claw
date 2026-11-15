@@ -119,7 +119,7 @@ def match_device(devices, choice) -> int | None:
 
 
 def pick_mic(choice=None):
-    """The mic to use: --mic or LISTEN_MIC if given, else the laptop's built-in array, else the default."""
+    """The mic to use: --mic or LISTEN_MIC if given, else the one Windows has set as the default."""
     choice = choice if choice is not None else (config.MIC or None)
     try:
         devices = list_inputs()
@@ -130,7 +130,7 @@ def pick_mic(choice=None):
         if idx is not None:
             return idx
         log(f'no input device matches "{choice}", using the default (see --list-mics)')
-    return match_device(devices, "microphone array")
+    return None     # the Windows default input: whatever the owner picked in Sound settings
 
 
 def print_mics(chosen) -> None:
