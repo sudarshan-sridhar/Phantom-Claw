@@ -246,11 +246,70 @@ def find_start_app(spoken: str, cutoff: float = 0.78) -> tuple[str, str] | None:
     return best
 
 
+def _windows() -> dict[int, str]:
+    """Every visible top-level window with a title: {handle: title}."""
+    import ctypes
+    from ctypes import wintypes
+
+    user = ctypes.windll.user32
+    found: dict[int, str] = {}
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def each(hwnd, _):
+        if user.IsWindowVisible(hwnd):
+            n = user.GetWindowTextLengthW(hwnd)
+            if n:
+                buf = ctypes.create_unicode_buffer(n + 1)
+                user.GetWindowTextW(hwnd, buf, n + 1)
+                found[int(hwnd)] = buf.value
+        return True
+
+    user.EnumWindows(each, 0)
+    return found
+
+
+def _to_front(hwnd: int) -> None:
+    """Put a window on top and give it the keyboard. Windows only lets a background program do
+    this right after a key press, so one tap of Alt is sent first."""
+    import ctypes
+
+    user = ctypes.windll.user32
+    if user.IsIconic(hwnd):
+        user.ShowWindow(hwnd, 9)        # restore from the taskbar
+    user.keybd_event(0x12, 0, 0, 0)     # Alt down
+    user.keybd_event(0x12, 0, 2, 0)     # Alt up
+    user.SetForegroundWindow(hwnd)
+    user.BringWindowToTop(hwnd)
+
+
+def show_window(before: dict[int, str], label: str, wait_s: float = 8.0) -> bool:
+    """After opening something, bring its window to the front: the new window if one appeared,
+    else an open window whose title carries the name (the program was already running)."""
+    import time
+
+    words = [w for w in re.split(r"[^a-z0-9]+", label.lower().replace(".exe", "")) if len(w) > 2]
+    end = time.monotonic() + wait_s
+    while time.monotonic() < end:
+        now = _windows()
+        fresh = [h for h in now if h not in before]
+        named = [h for h, title in now.items() if words and any(w in title.lower() for w in words)]
+        pick = next((h for h in fresh if h in named), None) or (fresh[0] if fresh else None)
+        if pick is None and named and time.monotonic() > end - wait_s + 1.5:
+            pick = named[0]             # nothing new after a moment: it was already open
+        if pick is not None:
+            _to_front(pick)
+            return True
+        time.sleep(0.25)
+    return False
+
+
 def _launch(tool: str, target: str, label: str, **extra) -> dict:
     if is_dry():
         return would(tool, f"open {target}", label=label, **extra)
+    before = _windows()
     os.startfile(target)  # noqa: S606 - opening is the whole point; the target came from the Start menu or a fixed table
-    return ok(tool, label=label, **extra)
+    shown = show_window(before, label)
+    return ok(tool, label=label, shown=shown, **extra)
 
 
 async def open_app(agent: str, name: str, dirs: list[Path] | None = None) -> dict:
@@ -376,7 +435,7 @@ def find_file(query: str, roots: list[Path] | None = None) -> Path | None:
                 if seen > SEARCH_MAX_FILES:
                     return best[1] if best else None  # a huge tree; settle for what we have
                 p = Path(dirpath) / f
-                if p.suffix.lower() in BLOCKED_EXT or f.startswith(("~$", ".")):
+                if p.suffix.lower() in BLOCKED_EXT or f.startswith(("~$", ".")) or re.search(r"env|secret|password|credential|token|\bkeys?\b", f.lower()):
                     continue
                 name = f" {_norm(f)} "
                 # each word starts a word in the name ("so101" also matches "so 101")

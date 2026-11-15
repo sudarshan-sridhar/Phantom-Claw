@@ -11,6 +11,7 @@ import asyncio
 import importlib
 import os
 import random
+import re
 import sys
 import threading
 import time
@@ -714,6 +715,13 @@ class Pipeline:
 
             result = await plan_task
             plan = result["plan"]
+            # On the laptop a character does what was asked and nothing more. Extras opened
+            # things the owner never wanted, so only the first tool runs unless the request
+            # itself asks for two things ("open Notepad and play some music").
+            if os.environ.get("PHANTOM_CHATTER", "").strip() != "1" and len(plan["laptop"]) > 1:
+                asked_two = bool(re.search(r"\b(and|then|also)\b", text.lower()))
+                if not asked_two:
+                    plan["laptop"] = plan["laptop"][:1]
 
             # Tools that come back with something to say start now, so they run while the first
             # line is being made and played. The rest run once the line is out.

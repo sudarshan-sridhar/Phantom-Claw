@@ -60,7 +60,18 @@ def open_address(tool: str, url: str) -> dict:
         return would(tool, f"open {url} in the browser", url=url)
     if os.environ.get("PHANTOM_NO_BROWSER") == "1":
         return ok(tool, detail="skipped (PHANTOM_NO_BROWSER)", url=url)
-    return {"ok": bool(webbrowser.open(url)), "tool": tool, "url": url}
+    from .apps import _windows, show_window
+
+    before = _windows()
+    opened = bool(webbrowser.open(url))
+    shown = False
+    if opened:
+        # the page opens as a tab in a browser that may be behind other windows: bring it up
+        try:
+            shown = show_window(before, "brave chrome edge firefox opera", wait_s=4.0)
+        except Exception:  # noqa: BLE001 - the page still opened
+            shown = False
+    return {"ok": opened, "tool": tool, "url": url, "shown": shown}
 
 
 async def open_url(agent: str, url: str) -> dict:
