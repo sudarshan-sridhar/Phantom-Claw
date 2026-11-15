@@ -42,3 +42,7 @@ Start-Part "overlay" "cmd.exe" $overlayArgs (Join-Path $root "overlay")
 
 $arm = if ($RealArm) { "the REAL arm" } else { "the pretend arm" }
 Write-Host "Phantom Claw is running on $arm. Say 'Phantom Claw, start' or press Ctrl+Shift."
+
+# checks before anything moves: cameras, motors, the app, the model services
+Start-Sleep 12
+& $py (Join-Path $root "setup\tools\preflight.py")
