@@ -1,0 +1,12 @@
+# secrets
+.env
+# status and session notes stay local
+STATUS.md
+# hand demo recordings and frames
+setup/*_frames/
+setup/*.mp4
+# build output
+node_modules/
+__pycache__/
+*.pyc
+dist/
