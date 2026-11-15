@@ -68,10 +68,12 @@ def ask_claude(img, prompt, size=(960, 540), quality=85, timeout=14.0):
                                          "data": encode_jpg(img, size, quality)}},
             {"type": "text", "text": prompt + "\nReply with the JSON object only."}]}])
     text = "".join(b.text for b in msg.content if b.type == "text")
-    m = re.search(r"\{.*\}", text, re.S)
-    if not m:
+    # take the first complete JSON object in the reply, whatever is written around it
+    i = text.find("{")
+    if i < 0:
         raise GeminiError("Claude gave no JSON")
-    return json.loads(m.group(0))
+    obj, _end = json.JSONDecoder().raw_decode(text[i:])
+    return obj
 
 
 def ask_json(img, prompt, size=(960, 540), timeout=25, models=MODELS, quality=85):

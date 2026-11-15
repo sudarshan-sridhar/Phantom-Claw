@@ -164,10 +164,10 @@ def main():
         # One hold: the jaws closed on the object, held still. That is the grip pose. How wide to
         # open on the way in and the pose above are worked out from it.
         shut, s2 = hold_and_read(bus, "Close the jaws on it and hold.", a.wait)
-        s1 = s3 = 0
+        s1 = 0
         grasp = dict(shut)
         grasp["gripper"] = min(2400, shut["gripper"] + 330)
-        above = {**grasp, **via_from_grasp(grasp)}
+        above, s3 = hold_and_read(bus, "Lift it a little.", a.wait * 0.6)
     finally:
         bus.close()
     via_taught = None
