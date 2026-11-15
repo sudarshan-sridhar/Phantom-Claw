@@ -1,0 +1,14 @@
+{
+  "items": ["bottle", "red bull", "sharpie", "scissors", "glue stick"],
+  "sentence": "bring me the {item}",
+  "channels": {"Oz": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]},
+  "window_s": 3.0,
+  "step_s": 0.25,
+  "harmonics": 2,
+  "cca_dims": 3,
+  "refractory_s": 5.0,
+  "port": 8767,
+  "server": "http://127.0.0.1:8765",
+  "items_url": null,
+  "rates_hz": null
+}

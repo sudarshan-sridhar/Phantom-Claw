@@ -52,3 +52,68 @@ All to the server on 127.0.0.1:8765:
 - `POST /api/event` with `{"type": "brain", "state": "stop" | "clear" | "focus" | "no_signal", ...}`. Focus has `value` (0 to 1) and `frozen` (true while a jaw clench is holding it still).
 
 If the server is down, or has no /api/event, the reader says so once and keeps going.
+
+# Choosing an item by looking at it
+
+A page shows one big black and white tile per item (bottle, red bull, sharpie, scissors, glue stick by default). Each tile flickers at its own rate. Look at one tile for a few seconds and the reader sends `POST /api/request {"text": "bring me the sharpie"}` to the agent server, the same request as saying it out loud. Closing your eyes still stops the arm, at the same time, and the stop always wins.
+
+What this is: when you look at something flickering, the visual cortex at the back of your head picks up the same rate, a few microvolts strong. The reader finds which rate is there. It knows where you are looking. It does not read thoughts or intentions, and looking at a tile by accident for a few seconds will choose it.
+
+Warning: the page flickers. Flicker can set off seizures in people with photosensitive epilepsy. Do not run it if the wearer, or anyone who can see the screen, has ever had a seizure. Nothing flickers until Start is pressed, and Esc stops it.
+
+## Where the puck goes
+
+The Octopus 16 is one puck with all 16 pins on one small patch of scalp, so there is a single seat for the whole head.
+
+Seat it at Oz: on the midline at the back of the head, about 3 to 4 cm above the bump at the base of the skull (the inion). Run a finger up the middle of the back of the head from the bump; Oz is where the skull starts to flatten out. The visual cortex sits right under it, and eyes-closed alpha is strong there too, so this one seat serves both the chooser and the stop.
+
+Part the hair, press the puck straight down so the pins reach skin, and hold it there with a snug headband or a beanie pulled over it. A headband across Oz works best if it sits just above the bump; check it does not tilt the puck. If contact at Oz stays poor (thick hair, the band keeps slipping), move to Pz, the seat in the section above. The stop works well there; the chooser will be weaker, since Pz is further from the visual cortex.
+
+What to tell us: only where the puck sits (Oz or Pz) and whether some pins never get contact. The config file `backend/brain/ssvep_config.json` maps board inputs 1 to 16 to a seat name, all 16 at Oz by default. If pins are dead, drop them there or pass `--channels "Oz=1-6,9-16"`. The reader also leaves out any pin that fails the contact check each moment, so a dead pin mostly costs nothing.
+
+## Session with the headset on
+
+Run everything from the project root with `C:\Users\sudar\.conda\envs\lerobot\python.exe`, the agent server already running.
+
+1. Close cloud.pieeg.com and OctoBridge tabs. The puck takes one Bluetooth connection at a time.
+2. Seat the puck at Oz as above. Power it from the power bank.
+3. Signal check: run the eyes-closed calibration from the section above with `--quick`. Its seat check says how many of the 16 pins have good contact; aim for 10 or more. If closing your eyes does not raise alpha, reseat before going on.
+4. Calibrate the chooser (about 90 seconds):
+
+       python -m backend.brain ssvep-calibrate --board
+
+   The page opens in the browser. Put it full screen on the screen you will use for the demo, sit at your normal distance, and press Start. A voice leads you: look at the cross in the middle, then at each highlighted tile in turn (8 seconds each), then close your eyes until two beeps. Keep your jaw loose and blink normally. It prints how well each tile was read and saves `setup/brain_ssvep.json`. Calibration is tied to that screen's refresh rate; calibrate again if you change screens.
+5. Run:
+
+       python -m backend.brain ssvep-run --board
+
+   Press Start, look at a tile and keep looking. The bar under it fills; at full it says "chosen: sharpie" and sends the request. Look away for a couple of seconds before choosing the same item again. Close your eyes any time to stop the arm. Add `--dry` to print the choice and send nothing. Ctrl+C ends it.
+
+When it picks wrong or never picks:
+
+- One tile keeps getting chosen when you look elsewhere: that tile read weakly at calibration (see the printed accuracy). Calibrate again, or move the item you need most to the first slot with `--items`; the first items get the most reliable rates.
+- Nothing gets chosen: check the terminal line for good pins. Fewer than a few good pins means reseat. Sit closer to the screen, turn the room lights down, and look at the middle of the tile, not its name.
+- It picks while you are only glancing: calibrate with a longer hold, `--hold 8` (2 seconds of steady looking).
+- Accuracy below about 60% for most tiles: the puck is probably not over Oz. Reseat lower on the head and calibrate again.
+
+## How the chooser decides
+
+- Rates: the page measures the screen's refresh rate, and each tile is white for half of a whole number of frames and black for the rest, so its rate is exact on that screen. Rates stay apart by at least 0.5 Hz, no rate sits on another's second or third harmonic, and rates between 7.5 and 13.5 Hz (the alpha band the stop watches) are avoided where the screen allows. At 144 Hz the five rates are 14.4, 16, 18, 20.57 and 6.55 Hz, none in the alpha band. At 60 Hz they are 15, 8.57, 20, 6 and 4.62 Hz; only 8.57 falls inside, and the lowest two read less reliably, so a 120 or 144 Hz screen is better.
+- Detector: every 0.25 s, the last 3 s of the good pins are filtered (3 to 45 Hz, 60 Hz notch), reduced to their strongest few principal components (or all pins, whichever calibration found better), and compared by canonical correlation with sines and cosines at each rate and twice the rate. The reference waves use the sample rate measured from the stream's time stamps (the puck has shown about 230 a second, not 250). Each rate's score is set against how it scores when nobody looks at it. A choice needs the best score above a threshold, ahead of the runner-up by a margin, for 6 windows in a row (1.5 s), then nothing for 5 s.
+- Keeping the stop and the chooser apart: the stop's alpha leaves out narrow bins around every flicker rate and its harmonic, so a tile response cannot look like closed eyes. The stop is checked first each tick; while it is on, or alpha is already above the stop level, nothing is chosen and choosing stays blocked for 5 s after it clears. Closing your eyes also removes the flicker response itself. Calibration records the stop level again at this seat with the tiles flickering.
+- Lost Bluetooth packets: `--board` here starts `backend/brain/bridge.py`, which uses PiEEG's own Bluetooth code but fills each short gap in the packet counter with a straight line, so the samples keep their true spacing. Lost packets otherwise blur the faster rates. `--plain-reader` uses PiEEG's quickstart unchanged.
+
+## Without the board
+
+    python -m backend.brain ssvep-calibrate --sim
+    python -m backend.brain ssvep-run --sim --dry
+
+The simulator makes 16 pins of brain-like noise with a resting alpha, a five times bigger alpha with the eyes closed, mains hum, and a 2 microvolt response at whichever tile it is "looking" at. On the page in simulator mode, click a tile to look at it, click empty space to look away, and press E to close or open the eyes. Calibration moves the simulated gaze by itself. With no browser at all, add `--auto --no-browser` (assumes a 60 Hz screen) and drive the gaze with a script:
+
+    python -m backend.brain ssvep-run --sim --dry --auto --no-browser --sim-script "2:bottle,10:none,12:sharpie,19:closed,24:open"
+
+Other switches: `--sim-ssvep-uv 1.5` (weaker response), `--sim-rate 230`, `--items "cup,pen,tape"`, `--sentence "please pass the {item}"`, `--port 8767`, `--log file.jsonl`, `--ssvep-calibration path`.
+
+## If our Bluetooth reader cannot connect
+
+The PiEEG dashboard (cloud.pieeg.com) has a Local Bridge desktop app that relays the stream over UDP, and an OSC stream out. We do not use them. They are the fallback if the direct reader cannot hold the puck; feeding either into an LSL stream named Octopus16 would let everything here run unchanged.

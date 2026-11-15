@@ -40,3 +40,5 @@ media/
 setup/brain_calibration.json
 /page.html
 backend/record/test_out/
+setup/brain_ssvep.json
+backend/brain/test_out/
