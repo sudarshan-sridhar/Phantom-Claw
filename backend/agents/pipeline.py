@@ -66,6 +66,7 @@ class Pipeline:
         self.now_fn = now_fn
         self.models = models
         self.states: dict[str, str] = {cid: "idle" for cid in CAST}
+        self._left_out = False   # the last arm result left the arm out of rest (stopped or error)
 
     # ------------------------------------------------------------ helpers
 
@@ -93,16 +94,24 @@ class Pipeline:
         except Exception:  # noqa: BLE001
             return False
 
-    async def run_arm(self, agent: str, skill: str, params: dict) -> dict:
-        """Run one arm skill in a worker thread, sending `arm` events for each phase."""
-        if not self.use_arm or self.arm is None:
-            return {"ok": False, "result": "skipped", "detail": "arm not used", "skill": skill}
-        if self._arm_busy():
-            return {"ok": False, "result": "busy", "detail": "arm busy", "skill": skill}
+    def _needs_rest(self) -> bool:
+        """True when the arm was left out of rest by a stop or an error. The arm's own at_rest
+        wins when it reports one; otherwise the last result decides."""
+        try:
+            at_rest = self.arm.status().get("at_rest")
+        except Exception:  # noqa: BLE001
+            at_rest = None
+        if at_rest is not None:
+            return not at_rest
+        return self._left_out
+
+    async def _run_skill(self, agent: str, skill: str, params: dict, auto: bool = False) -> dict:
         loop = asyncio.get_running_loop()
 
         def on_phase(phase: str) -> None:
             ev = {"type": "arm", "agent": agent, "skill": skill, "phase": phase}
+            if auto:
+                ev["auto"] = True
             loop.call_soon_threadsafe(lambda: asyncio.ensure_future(self.emit(ev)))
 
         try:
@@ -111,7 +120,39 @@ class Pipeline:
             await self.error("arm", f"{skill}: {type(e).__name__}: {e}")
             res = {"ok": False, "result": "error", "detail": str(e)[:200]}
         await asyncio.sleep(0)  # let the last phase events go out first
+        if res.get("result") in ("stopped", "error"):
+            self._left_out = True
+        elif skill == "rest" and res.get("ok"):
+            self._left_out = False
+        elif res.get("ok"):
+            self._left_out = False   # every other skill that finished ends at rest
         return {**res, "skill": skill}
+
+    async def run_arm(self, agent: str, skill: str, params: dict) -> dict:
+        """Run one arm skill in a worker thread, sending `arm` events for each phase.
+
+        After a stop or an error the arm is left where it stopped. Before the next skill it is
+        sent to rest first (events carry "auto": true, the result carries "auto_rest"). A
+        gesture is not worth the wait, so it is skipped after an automatic rest."""
+        if not self.use_arm or self.arm is None:
+            return {"ok": False, "result": "skipped", "detail": "arm not used", "skill": skill}
+        if self._arm_busy():
+            return {"ok": False, "result": "busy", "detail": "arm busy", "skill": skill}
+        auto = None
+        if skill != "rest" and self._needs_rest():
+            await self.emit({"type": "arm", "agent": agent, "skill": "rest", "phase": "auto_rest", "auto": True})
+            auto = await self._run_skill(agent, "rest", {}, auto=True)
+            if not auto.get("ok"):
+                await self.error("arm", f"could not go back to rest before {skill}: {auto.get('detail')}")
+                return {"ok": False, "result": "error", "detail": f"could not go back to rest first: {auto.get('detail')}",
+                        "skill": skill, "auto_rest": auto}
+            if skill == "gesture":
+                return {"ok": False, "result": "skipped", "detail": "went back to rest instead of this gesture",
+                        "skill": skill, "auto_rest": auto}
+        res = await self._run_skill(agent, skill, params)
+        if auto is not None:
+            res["auto_rest"] = auto
+        return res
 
     async def _gesture(self, agent: str, seconds: float, set_states: bool) -> dict:
         seconds = round(min(10.0, max(1.5, float(seconds))), 2)

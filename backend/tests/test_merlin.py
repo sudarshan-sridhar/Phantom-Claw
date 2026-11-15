@@ -41,13 +41,16 @@ def test_escanor_clock_and_politeness():
     noon = datetime(2026, 11, 15, 12, 0)
     night = datetime(2026, 11, 15, 23, 0)
     assert cast.decide("escanor", "hand me the bottle", noon)["arm"]["skill"] == "point"
-    assert cast.decide("escanor", "please hand me the bottle", noon)["arm"]["skill"] == "grip_bottle"
-    assert cast.decide("escanor", "hand me the bottle", night)["arm"]["skill"] == "grip_bottle"
+    assert cast.decide("escanor", "please hand me the bottle", noon)["arm"] == \
+        {"skill": "fetch_bottle", "pace": 0.8, "wait_s": 3, "look_first": False}
+    assert cast.decide("escanor", "hand me the bottle", night)["arm"]["skill"] == "fetch_bottle"
+    assert cast.decide("escanor", "please lift the bottle", noon)["arm"]["skill"] == "grip_bottle"
+    assert cast.decide("escanor", "pick it up", noon)["arm"]["skill"] == "point"
     # asked twice
     d = cast.decide("escanor", "hand me the bottle", noon)
     cast.remember("escanor", "hand me the bottle", cast.outcome_of(d))
     d2 = cast.decide("escanor", "hand me the bottle now", noon)
-    assert d2["again"] and d2["arm"]["skill"] == "grip_bottle"
+    assert d2["again"] and d2["arm"]["skill"] == "fetch_bottle"
 
 
 def test_king_half_then_grip():
@@ -55,7 +58,13 @@ def test_king_half_then_grip():
     assert d["arm"]["skill"] == "half_reach"
     cast.remember("king", "hand me the bottle", cast.outcome_of(d))
     d2 = cast.decide("king", "give me the bottle")
-    assert d2["arm"] == {"skill": "grip_bottle", "pace": 0.4, "hold_s": 1, "flourish": False, "look_first": False}
+    assert d2["arm"] == {"skill": "fetch_bottle", "pace": 0.4, "wait_s": 2, "look_first": False}
+    cast.reset_memory()
+    assert cast.decide("king", "lift the bottle")["arm"]["skill"] == "half_reach"
+    cast.remember("king", "lift the bottle", "half")
+    assert cast.decide("king", "lift the bottle up")["arm"] == \
+        {"skill": "grip_bottle", "pace": 0.4, "hold_s": 1, "flourish": False, "look_first": False}
+    cast.remember("king", "hand me the bottle", "half")
     # Merlin hands a repeated request back to whoever dodged it
     assert merlin.choose_by_role("hand me the bottle") == "king"
 
@@ -94,9 +103,13 @@ def test_pace_clamped_and_tools_checked():
 
 def test_bottle_job_forces_ego_mapping():
     raw = {"agent": "ban", "say": "Mine!", "arm": {"skill": "grip_bottle", "pace": 0.1, "hold_s": 8}, "laptop": []}
-    d = cast.decide("ban", "hand me the bottle")
+    d = cast.decide("ban", "lift the bottle")
     plan, _, _ = merlin.check_plan(raw, "ban", d)
     assert plan["arm"] == {"skill": "grip_bottle", "pace": 1.0, "hold_s": 3, "flourish": True, "look_first": False}
+    # a hand-over request gets fetch_bottle even when the LLM picks the wrong skill
+    d = cast.decide("ban", "hand me the bottle")
+    plan, _, _ = merlin.check_plan(raw, "ban", d)
+    assert plan["arm"] == {"skill": "fetch_bottle", "pace": 1.0, "wait_s": 2, "look_first": False}
 
 
 def test_not_json_object_replaced():

@@ -73,7 +73,7 @@ def test_busy_refused():
     ("grip_bottle", {"hold_s": 8}),
     ("gesture", {"style": "merlin", "seconds": 10}),
 ])
-def test_stop_holds_then_needs_rest(skill, params):
+def test_stop_holds_then_auto_rest(skill, params):
     arm = FakeArm(time_scale=0.02)
     th, box = run_in_thread(arm, skill, params)
     time.sleep(0.08)
@@ -83,15 +83,15 @@ def test_stop_holds_then_needs_rest(skill, params):
     assert time.time() - t < 0.2, "stop must be quick"
     assert box["out"]["result"] == "stopped" and box["out"]["ok"] is False
     assert "done" not in box["phases"] and "returning" not in box["phases"]
-    # not at rest any more: everything but rest is refused
-    out, phases = run(arm, "point", {})
-    assert out["result"] == "error" and "rest" in out["detail"]
-    assert phases == ["error"]
+    assert arm.status()["at_rest"] is False
+    # not at rest any more: the next skill goes to rest by itself first, and says so
     arm.time_scale = SCALE
-    out, _ = run(arm, "rest")
-    assert out["result"] == "done"
-    out, _ = run(arm, "point", {})
-    assert out["result"] == "done"
+    out, phases = run(arm, "point", {})
+    assert out["result"] == "done" and out.get("auto_rest") is True and "rest first" in out["detail"]
+    assert phases == ["auto_rest"] + MOVE
+    assert arm.status()["at_rest"] is True
+    out, phases = run(arm, "point", {})
+    assert "auto_rest" not in out and phases == MOVE
 
 
 def test_stop_when_idle_does_nothing_lasting():
@@ -127,7 +127,10 @@ def test_validate_clamps():
     assert validate("rest", None) == {}
     assert validate("gesture", {"style": " King ", "seconds": 30}) == {"style": "king", "seconds": 10.0}
     assert validate("gesture", {"style": "zeldris", "seconds": 0.2}) == {"style": "gowther", "seconds": 1.5}
-    assert set(SKILLS) == {"grip_bottle", "point", "half_reach", "wave", "rest", "gesture"}
+    assert set(SKILLS) == {"grip_bottle", "fetch_bottle", "point", "half_reach", "wave", "rest", "gesture"}
+    assert validate("fetch_bottle", {"pace": 3, "wait_s": 30, "look_first": "yes"}) == \
+        {"pace": 1.0, "wait_s": 6.0, "look_first": True}
+    assert validate("fetch_bottle", {"wait_s": 0.5}) == {"pace": 0.5, "wait_s": 2.0, "look_first": False}
     with pytest.raises(ValueError):
         validate("dance", {})
 
@@ -156,7 +159,10 @@ def test_durations_are_realistic():
     for style in STYLES:
         for sec in (1.5, 4, 10):
             extra = nominal_duration("gesture", {"style": style, "seconds": sec}) - sec
-            assert 0 <= extra <= 4.0, (style, sec, extra)
+            # the whole gesture fits the line; king flops back early, so his can be shorter
+            assert (-2.5 if style == "king" else 0) <= extra <= 1.5, (style, sec, extra)
+    assert 20 <= nominal_duration("fetch_bottle", {"pace": 1.0, "wait_s": 2}) <= 30
+    assert nominal_duration("fetch_bottle", {"pace": 0.0}) > nominal_duration("fetch_bottle", {"pace": 1.0})
 
 
 def test_fake_takes_its_time():
@@ -180,9 +186,15 @@ def test_gesture_plan_limits(style, seconds):
     assert rest[2] <= pose[2] <= photo[2]
     assert photo[3] <= pose[3] <= rest[3]
     assert abs(pose[4] - g["flex_anchor"]) <= 180
-    # rise and return no faster than the caps
-    assert (pose[2] - rest[2]) / ((1 - S.LEAD) * g["rise_s"]) <= S.RISE_V[2] + 1
-    assert (rest[3] - pose[3]) / g["rise_s"] <= S.RISE_V[3] + 1
+    # rise and return no faster than the caps (speeds as the legs are asked for)
+    assert (pose[2] - rest[2]) / ((1 - S.LEAD) * g["rise_cmd"]) <= S.RISE_V[2] + 1
+    assert (rest[3] - pose[3]) / g["rise_cmd"] <= S.RISE_V[3] + 1
+    assert (pose[2] - rest[2]) / ((1 - S.LEAD) * g["back_cmd"]) <= S.RISE_V[2] + 1
+    # the whole gesture lasts about as long as the line
+    total = g["rise_s"] + g["talk_s"] + g["back_s"]
+    assert total - seconds <= 1.5, (style, seconds, total)
+    if style != "king":
+        assert total >= seconds
     base = {**pose, 5: 2030, 6: g["grip"]}
     steps = S.gesture_steps(style, g["talk_s"], base, g["flex_anchor"])
     assert steps == sorted(steps, key=lambda s: (s[0], s[1]))

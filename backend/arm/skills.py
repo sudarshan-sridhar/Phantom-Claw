@@ -5,19 +5,23 @@ Follows docs/contract.md, sections "Arm skills" and "Skill server interface".
 import math
 from typing import Callable, Protocol
 
-PHASES = ("start", "at_target", "gripped", "lifted", "put_back", "missed", "returning", "done", "error")
-RESULTS = ("done", "missed", "stopped", "error", "busy")
+PHASES = ("auto_rest", "start", "seen", "at_target", "gripped", "lifted", "carrying", "offering", "handed_over",
+          "put_back", "missed", "returning", "done", "error")
+RESULTS = ("done", "handed_over", "put_back", "missed", "no_bottle", "out_of_reach", "turn_failed",
+           "stopped", "error", "busy")
+OK_RESULTS = ("done", "handed_over", "put_back")   # the skill did its job (put_back: nobody took the bottle)
 
 # skill -> {parameter: default}. Parameters not listed here are dropped by validate().
 SKILLS = {
     "grip_bottle": {"pace": 0.5, "hold_s": 5.0, "flourish": False, "look_first": False},
+    "fetch_bottle": {"pace": 0.5, "wait_s": 3.0, "look_first": False},
     "point": {"pace": 0.5},
     "half_reach": {"pace": 0.5},
     "wave": {},
     "rest": {},
     "gesture": {"style": "gowther", "seconds": 3.0},
 }
-RANGES = {"pace": (0.0, 1.0), "hold_s": (1.0, 8.0), "seconds": (1.5, 10.0)}
+RANGES = {"pace": (0.0, 1.0), "hold_s": (1.0, 8.0), "wait_s": (2.0, 6.0), "seconds": (1.5, 10.0)}
 STYLES = ("escanor", "elizabeth", "ban", "king", "gowther", "merlin")
 
 
@@ -72,8 +76,8 @@ def validate(skill, params=None):
     return out
 
 
-def result(res, detail=""):
-    return {"ok": res == "done", "result": res, "detail": detail}
+def result(res, detail="", **extra):
+    return {"ok": res in OK_RESULTS, "result": res, "detail": detail, **extra}
 
 
 # Timing. grip_bottle.py used 4.2 s legs, a 1.0 s lift and a 1.2 s lower.
@@ -114,9 +118,67 @@ def hold_time(hold_s, flourish):
     return max(hold_s, FLOURISH_S) if flourish else hold_s
 
 
+# fetch_bottle, the numbers from setup/tools/fetch_bottle.py. At pace 1.0 every leg takes exactly
+# the script's time; lower paces stretch every arm leg, up to 1.8 times at pace 0. Gripper
+# actions and the short pauses keep the script's times.
+FETCH_OUT_S = 3.3            # rest to just above the cap, all joints in one move
+FETCH_OPEN_S = 1.2           # the gripper opens during the first part of the out leg
+FETCH_APPROACH_S = 1.0       # the short final approach onto the cap
+FETCH_LOOK_FIRST_S = 1.0     # look_first: pause above the cap before the final approach
+FETCH_TUCK_S = 1.9           # lift and pull the bottle in close
+FETCH_TURN_MIN_S, FETCH_TURN_RATE = 1.8, 400.0   # base turn: at least 1.8 s, at most 400 ticks/s
+FETCH_REACH_S = 1.5          # reach out toward the person in the last half of the turn
+FETCH_REST_S = 4.5           # back to rest
+FETCH_VIA_S = 1.2            # back up above the cap (missed grip, after the put back)
+FETCH_ABOVE_SPOT_S = 1.6     # put back: down to just above the spot
+FETCH_SET_S = 1.2            # put back: stand it on the table
+FETCH_CLEAR_S = 1.0          # after a handover, lift clear of the hand
+FETCH_RELEASE_S = 0.6        # open the gripper to let go on the table
+FETCH_HANDOVER_OPEN_S = 0.4  # open the gripper when the person takes it
+FETCH_HANDOVER_WAIT_S = 0.8  # give the hand time to come away before moving
+FETCH_AFTER_OPEN_S = 0.2
+FETCH_OFFER_SETTLE_S = 0.35  # let the arm settle before taking the tug reference
+RECOVER_TUCK_S, RECOVER_ALIGN_S, RECOVER_TABLE_S, RECOVER_CLEAR_S = 1.5, 1.0, 1.6, 1.2
+FETCH_CLOSE_S = 0.8          # about how long the close takes (speed 500 onto the cap)
+FETCH_LOOK_S = 3.0           # about how long the overhead picture and Gemini take
+WRIST_LOOK_S = 1.6           # one wrist-camera stop of the sweep: small move plus Gemini
+
+
+def fetch_stretch(pace):
+    """1.0 at pace 1 (the script's timings), 1.8 at pace 0."""
+    return 1.8 - 0.8 * max(0.0, min(1.0, pace))
+
+
+def fetch_turn_s(pan_from, pan_to, pace):
+    return max(FETCH_TURN_MIN_S, abs(pan_to - pan_from) / FETCH_TURN_RATE) * fetch_stretch(pace)
+
+
+def fetch_nominal(pace, wait_s, look_first, outcome="handed_over", turn_ticks=600):
+    """About how long fetch_bottle takes for one outcome, in seconds."""
+    k = fetch_stretch(pace)
+    t = FETCH_LOOK_S
+    if outcome in ("no_bottle", "out_of_reach"):
+        return t
+    t += FETCH_OUT_S * k + FETCH_APPROACH_S * k + FETCH_CLOSE_S + (FETCH_LOOK_FIRST_S if look_first else 0.0)
+    if outcome == "missed":
+        return t + FETCH_RELEASE_S + FETCH_VIA_S * k + FETCH_REST_S * k
+    t += FETCH_TUCK_S * k
+    turn = max(FETCH_TURN_MIN_S, turn_ticks / FETCH_TURN_RATE) * k
+    if outcome == "turn_failed":
+        return t + 0.5 * turn + 1.2 + (RECOVER_TUCK_S + RECOVER_ALIGN_S + RECOVER_TABLE_S + RECOVER_CLEAR_S) * k \
+            + FETCH_RELEASE_S + FETCH_AFTER_OPEN_S + FETCH_REST_S * k
+    t += max(turn, 0.5 * turn + FETCH_REACH_S * k) + 0.3 + FETCH_OFFER_SETTLE_S
+    if outcome == "handed_over":
+        return t + 0.5 * wait_s + FETCH_HANDOVER_OPEN_S + FETCH_HANDOVER_WAIT_S + FETCH_CLEAR_S * k + FETCH_REST_S * k
+    return (t + wait_s + FETCH_TUCK_S * k + turn + FETCH_ABOVE_SPOT_S * k + FETCH_SET_S * k + FETCH_RELEASE_S
+            + FETCH_AFTER_OPEN_S + FETCH_VIA_S * k + FETCH_REST_S * k)
+
+
 def nominal_duration(skill, params=None):
     """About how long a skill takes, in seconds, without stops."""
     p = validate(skill, params)
+    if skill == "fetch_bottle":
+        return fetch_nominal(p["pace"], p["wait_s"], p["look_first"])
     if skill == "grip_bottle":
         t = leg_time(p["pace"])
         out = (LOOK_LEG1 + LOOK_LEG2) * t + LOOK_PAUSE_S if p["look_first"] else t
@@ -174,19 +236,116 @@ GESTURE_STYLE = {
 }
 
 
-def gesture_plan(style, seconds, rest=None):
-    """Rise and return time, pose fraction and the talking pose (joints 1 to 4) for one line."""
-    rest = rest or REST_POSE
+# How long a servo move really takes. The servo ramps up and down at its acceleration
+# register (x100 ticks/s^2), so a short leg asked to take 0.6 s can take twice that.
+# The gesture planner uses this so the whole gesture fits the line.
+GESTURE_LEG_ACC = 14                           # rise and return ramps (ban's talking moves use 14 too)
+LEG_VMAX = {1: 500, 2: RISE_V[2], 3: RISE_V[3], 4: 500, 6: 900}
+EDGE_FRAC, EDGE_MIN, EDGE_MAX = 0.25, 0.9, 1.8   # rise (and return) budget: a quarter of the line
+TALK_MIN_S = 0.4
+GESTURE_OVER_S = 0.4                           # the body may finish this much after the voice
+
+
+def move_time(d, dur, acc):
+    """Seconds for one servo to travel d ticks when its speed register is set for dur seconds."""
+    d = abs(d)
+    if d <= 2:
+        return 0.0
+    v = max(12, round(d / max(dur, 1e-3)))
+    a = max(1, acc) * 100.0
+    if d >= v * v / a:
+        return d / v + v / a
+    return 2 * math.sqrt(d / a)
+
+
+def _leg_items(dists, dur, back):
+    """(joint, start, duration) as RealArm._leg_out (back False) and _leg_back (back True) time them."""
+    out = []
+    for j, d in dists.items():
+        if j == 2:
+            out.append((j, d, 0.0 if back else LEAD * dur, (1 - LEAD) * dur))
+        elif j == 6:
+            out.append((j, d, 0.6 * dur, 0.4 * dur) if back else (j, d, 0.0, min(GRIPPER_OPEN_S, dur)))
+        else:
+            out.append((j, d, 0.0, dur))
+    return out
+
+
+def leg_real_time(dists, dur, back=False, acc=GESTURE_LEG_ACC):
+    """Real seconds for one rise (back False) or return (back True) leg, and whether every joint
+    stays under its speed cap."""
+    real, ok = 0.0, True
+    for j, d, ts, dj in _leg_items(dists, dur, back):
+        if d > 2 and d / dj > LEG_VMAX.get(j, 500) + 1:
+            ok = False
+        real = max(real, ts + move_time(d, dj, acc))
+    return real, ok
+
+
+def _fit_leg(dists, budget, back):
+    """Shortest real time for this leg inside the speed caps: returns (commanded s, real s)."""
+    best = None
+    for n in range(2, 41):
+        c = budget * n / 20.0
+        real, ok = leg_real_time(dists, c, back)
+        if ok and (best is None or real < best[1] - 1e-9):
+            best = (c, real)
+    if best is None:
+        c = 2 * budget
+        while not leg_real_time(dists, c, back)[1]:
+            c *= 1.25
+        best = (c, leg_real_time(dists, c, back)[0])
+    return best
+
+
+def _pose_at(style, f, rest):
     st = GESTURE_STYLE[style]
-    rise_s = max(1.0, min(1.8, 0.9 + 0.12 * seconds))     # short lines rise quickly
-    f_cap = min(RISE_V[2] * (1 - LEAD) * rise_s / abs(PHOTO_POSE[2] - rest[2]),
-                RISE_V[3] * rise_s / abs(PHOTO_POSE[3] - rest[3]))
-    f = min(st["rise"], f_cap)                               # a short line rises less, never faster
     line = {i: round(rest[i] + f * (PHOTO_POSE[i] - rest[i])) for i in range(1, 5)}
     pose = dict(line)
     pose[4] = line[4] + st["flex"]
+    return line, pose
+
+
+def gesture_plan(style, seconds, rest=None):
+    """Pose fraction, talking pose (joints 1 to 4) and timings for one line.
+
+    The whole gesture (rise, talk, return) is planned to last about the line's length plus
+    GESTURE_OVER_S. Rise and return each get about a quarter of the line; the pose height is
+    then the tallest one the servos can really reach in that time, so a short line rises less
+    instead of moving faster or running long. rise_s and back_s are the real expected times;
+    rise_cmd and back_cmd are what the legs are asked for (the ramps add the difference)."""
+    rest = rest or REST_POSE
+    st = GESTURE_STYLE[style]
+    seconds = max(RANGES["seconds"][0], min(RANGES["seconds"][1], float(seconds)))
+    edge = max(EDGE_MIN, min(EDGE_MAX, EDGE_FRAC * seconds))
+    grip_d = abs(st["grip"] - GRIP_CLOSED)
+
+    def legs(f, with_grip=True):
+        _, pose = _pose_at(style, f, rest)
+        dists = {j: abs(pose[j] - rest[j]) for j in range(1, 5)}
+        if with_grip:
+            dists[6] = grip_d
+        return _fit_leg(dists, edge, back=False), _fit_leg(dists, edge, back=True)
+
+    def fits(f):
+        # the gripper does not depend on the height, so only the arm joints decide it
+        (_, up), (_, down) = legs(f, with_grip=False)
+        return up <= edge + 1e-6 and down <= edge + 1e-6
+
+    if fits(st["rise"]):
+        f = st["rise"]
+    else:
+        lo, hi = 0.0, st["rise"]
+        for _ in range(24):
+            mid = (lo + hi) / 2
+            lo, hi = (mid, hi) if fits(mid) else (lo, mid)
+        f = max(0.02, lo)
+    line, pose = _pose_at(style, f, rest)
+    (rise_cmd, rise_s), (back_cmd, back_s) = legs(f)
+    talk_s = max(TALK_MIN_S, seconds + GESTURE_OVER_S - rise_s - back_s) * st["talk"]
     return {"style": style, "f": f, "pose": pose, "flex_anchor": line[4], "grip": st["grip"],
-            "rise_s": rise_s, "talk_s": seconds * st["talk"], "back_s": rise_s}
+            "rise_s": round(rise_s, 3), "rise_cmd": round(rise_cmd, 3), "talk_s": round(talk_s, 3),
+            "back_s": round(back_s, 3), "back_cmd": round(back_cmd, 3), "acc": GESTURE_LEG_ACC}
 
 
 def gesture_clamp(j, g, flex_anchor, rest=None):

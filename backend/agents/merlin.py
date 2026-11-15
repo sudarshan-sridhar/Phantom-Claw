@@ -11,7 +11,8 @@ from . import cast as cast_mod
 from .cast import AGENT_IDS, ARM_MAP, CAST, SAFE_LINES
 
 # Skills an LLM plan may use. `gesture` exists on the arm but only the server starts it.
-PLAN_SKILLS = {"grip_bottle", "point", "half_reach", "wave", "rest"}
+PLAN_SKILLS = {"grip_bottle", "fetch_bottle", "point", "half_reach", "wave", "rest"}
+BOTTLE_SKILLS = ("grip_bottle", "fetch_bottle", "point", "half_reach")
 TOOLS = {"note", "todo", "timer", "open_url", "lookup"}
 SAY_MAX = 140
 
@@ -201,6 +202,14 @@ def _check_arm(arm: Any, agent: str, issues: list[str]) -> tuple[dict | None, bo
             "flourish": bool(arm.get("flourish", False)),
             "look_first": bool(arm.get("look_first", False)),
         }
+    elif skill == "fetch_bottle":
+        base = ARM_MAP[agent]["fetch"]
+        out = {
+            "skill": skill,
+            "pace": _clamp(arm.get("pace", base["pace"]), 0.0, 1.0, base["pace"]),
+            "wait_s": _clamp(arm.get("wait_s", base["wait_s"]), 2, 6, base["wait_s"]),
+            "look_first": bool(arm.get("look_first", False)),
+        }
     elif skill in ("point", "half_reach"):
         out = {"skill": skill, "pace": _clamp(arm.get("pace", 0.5), 0.0, 1.0, 0.5)}
     else:
@@ -208,7 +217,7 @@ def _check_arm(arm: Any, agent: str, issues: list[str]) -> tuple[dict | None, bo
     for k, v in arm.items():
         if k != "skill" and k not in out:
             issues.append(f"dropped arm param {k}")
-        elif k in ("pace", "hold_s") and isinstance(v, (int, float)) and out.get(k) != round(float(v), 2):
+        elif k in ("pace", "hold_s", "wait_s") and isinstance(v, (int, float)) and out.get(k) != round(float(v), 2):
             issues.append(f"clamped {k} {v} -> {out[k]}")
     return out, True
 
@@ -252,7 +261,7 @@ def check_plan(raw: Any, agent: str, decision: dict | None = None) -> tuple[dict
         if raw.get("agent") is not None:
             issues.append(f"agent {raw.get('agent')!r} replaced by {agent!r}")
 
-    say = _clean_say(raw.get("say"))
+    say = _clean_say(cast_mod.polish_line(agent, str(raw.get("say") or "")))
     if not say:
         return safe_plan(agent), issues + ["empty say"], True
 
@@ -262,12 +271,14 @@ def check_plan(raw: Any, agent: str, decision: dict | None = None) -> tuple[dict
 
     if decision and decision.get("bottle_job"):
         wanted = dict(decision["arm"])
-        if arm is None or arm.get("skill") in ("grip_bottle", "point", "half_reach"):
+        if arm is None or arm.get("skill") in BOTTLE_SKILLS:
             if arm != wanted:
                 issues.append(f"ego mapping applied: {wanted['skill']}")
             arm = wanted
     elif arm and arm["skill"] == "grip_bottle":
         arm = dict(ARM_MAP[agent]["agree"])
+    elif arm and arm["skill"] == "fetch_bottle":
+        arm = dict(ARM_MAP[agent]["fetch"])
 
     laptop_raw = raw.get("laptop") or []
     if not isinstance(laptop_raw, list):

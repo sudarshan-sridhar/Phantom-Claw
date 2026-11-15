@@ -52,7 +52,7 @@ def test_line_with_arm_skill_has_no_gesture(monkeypatch):
     monkeypatch.setattr(providers, "get_json", _fake_llm(arm={"skill": "grip_bottle"}))
     arm = StandinArm(speed=50)
     events = []
-    _run(_pipe(events, arm), "Ban hand me the bottle", None)
+    _run(_pipe(events, arm), "Ban lift the bottle", None)
     assert [s for s, _ in arm.log] == ["grip_bottle"]
 
 

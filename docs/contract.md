@@ -11,6 +11,7 @@ third-hand/
   backend/              Python 3.12
     server.py           FastAPI app, port 8765
     arm/                skill server (real arm and pretend arm)
+    vision/             overhead and wrist cameras, Gemini boxes, desk mapping, taught grips
     agents/             cast, Merlin, LLM providers, voice
     tools/              laptop tools
     cache/tts/          saved speech (ignored by Git)
@@ -39,7 +40,7 @@ Voice ids are in `setup/cast_voices.json` as `{id: {"voice": name, "voice_id": i
 
 Character notes (lines are short, never longer than the action they go with):
 - Escanor: thinks most jobs are beneath him. Refuses an easy arm job the first time and points instead. Does it properly when asked politely ("please") or asked a second time. His pride follows the laptop clock: full from 9:00 to 17:00, and from 21:00 to 6:00 he is timid, apologetic and does whatever he is asked.
-- Elizabeth: gentle, checks before acting, asks if you need anything else.
+- Elizabeth: gentle, checks before acting, now and then (at most one line in three) asks if you need anything else.
 - Ban: wants every job, quick, cocky, does a little more than asked.
 - King: does the least that counts. Short answers. Sighs.
 - Gowther: flat, literal, no feelings. Reports the result and nothing else.
@@ -67,12 +68,21 @@ One JSON object. Free text never drives the arm.
 
 | skill | What the arm does | Parameters |
 |---|---|---|
+| `fetch_bottle` | Find the bottle and the person with the overhead camera and Gemini, turn to the bottle, grip the cap with the taught grips blended by distance, lift and tuck it in, turn to the person, hold it out and beep, let go when the person tugs it or the wrist camera sees a hand; if nobody takes it, carry it back to its spot; return to rest. Ported from `setup/tools/fetch_bottle.py`. | `pace` 0.0 to 1.0 (1.0 is the script's timings; lower stretches every leg, 1.8 times longer at 0), `wait_s` 2 to 6 (how long it holds it out), `look_first` bool (pause 1 s above the cap before the final approach) |
 | `grip_bottle` | From rest: go to the bottle, grip it by the cap, lift, hold in the air, put it back, return to rest | `pace` 0.0 to 1.0 (0 slowest, 1 fastest), `hold_s` 1 to 8, `flourish` bool (small wrist roll while holding), `look_first` bool (pause above the bottle before lowering) |
 | `point` | Raise the arm toward the bottle, hold 2 s, return to rest. No grip. | `pace` |
 | `half_reach` | Go part of the way toward the bottle, stop, return to rest. No grip. | `pace` |
 | `wave` | Raise to the photo pose, play the 5 s lively move, return to rest | none |
-| `rest` | Return to rest and hold | none |
-| `gesture` | Body language while a character talks. Rises from rest to a talking pose, moves in that character's manner for the length of the line, returns to rest. Never grips, never goes near the bottle. | `style`: an agent id including `merlin`; `seconds` 1.5 to 10 |
+| `rest` | Return to rest and hold, from any pose a skill can leave the arm in. Holding the bottle out of rest: stand it on the table where the arm is, let go, lift clear, then fold back. Jaws open with the arm reaching out: lift straight up first. | none |
+| `gesture` | Body language while a character talks. Rises from rest to a talking pose, moves in that character's manner for the length of the line, returns to rest. The whole gesture, rise and return included, lasts about the line's length (at most about 0.5 s longer); a short line rises less. Never grips, never goes near the bottle. | `style`: an agent id including `merlin`; `seconds` 1.5 to 10 |
+
+Request kinds: being given, handed, passed or brought the bottle ("get me the bottle", "hand me the bottle", "pass it here") is `fetch_bottle`. Picking it up, lifting it or holding it up ("pick it up", "lift the bottle", "hold it up", "grab it") is `grip_bottle`. A request that only mentions the bottle ("what's in the bottle?") is not an arm job. Arm skills are only for physical requests.
+
+fetch_bottle details:
+- Where things are: the overhead camera (index 3) and Gemini give boxes for the bottle and the person, mapped onto the desk with `setup/table_map.json`. The bottle must be 19 to 41 cm from the base (`out_of_reach` otherwise). Person not seen: it holds the bottle out to the right (1.2 rad).
+- Wrist camera only: when the overhead camera gives no picture (phone off: black frames or the iVCam "waiting" card), the arm tilts the wrist up from rest (wrist flex 2150), steps the base through five angles (-40 to +40 degrees, small slow steps), asks Gemini at each for the bottle and the person in the upright wrist picture, then turns until the bottle is in the middle of the picture. Distance cannot be measured with one camera, so it uses the taught middle grip (the result detail says so). Person not found: 45 degrees to the right. Switch it off with `PHANTOM_WRIST_FALLBACK=0`.
+- The base runs at full torque (1000) during the fetch and goes back to 500 at rest. The bottle is tucked in before the base turns. While carrying, a joint 110 ticks short and still counts as arrived.
+- A turn that cannot finish (stall or too much current): it stands the bottle on the table where it stopped, lets go, lifts clear and goes home (`turn_failed`).
 
 ### The arm is the body of whoever is speaking
 
@@ -91,12 +101,14 @@ Gesture styles, all small, all above the desk, all inside the joint limits:
 - gowther: rises to a neutral pose, perfectly still, one precise head tilt.
 - merlin: slow floating circles, jaws a little open.
 
-Ego to arm mapping, applied by the agent prompt and clamped by the check:
-- Gowther: `grip_bottle`, pace 0.5, hold 5, no extras.
-- Escanor: `point` when refusing; `grip_bottle` pace 0.8, hold 5 when he agrees.
-- Elizabeth: `grip_bottle`, pace 0.2, hold 4, `look_first` true.
-- Ban: `grip_bottle`, pace 1.0, hold 3, `flourish` true.
-- King: `half_reach` the first time; `grip_bottle` pace 0.4, hold 1 when asked again.
+Ego to arm mapping, applied by the agent prompt and clamped by the check (hand it over / pick it up):
+- Gowther: `fetch_bottle` pace 0.6, wait 3 / `grip_bottle` pace 0.5, hold 5, no extras.
+- Escanor: `point` when refusing (first time, during the day, not polite); when he agrees (asked politely, asked again, or at night) `fetch_bottle` pace 0.8, wait 3 / `grip_bottle` pace 0.8, hold 5.
+- Elizabeth: `fetch_bottle` pace 0.3, wait 5, `look_first` true / `grip_bottle` pace 0.2, hold 4, `look_first` true.
+- Ban: `fetch_bottle` pace 1.0, wait 2 / `grip_bottle` pace 1.0, hold 3, `flourish` true.
+- King: `half_reach` the first time; asked again `fetch_bottle` pace 0.4, wait 2 / `grip_bottle` pace 0.4, hold 1.
+
+Spoken lines: always contractions ("I'm", "it's", "don't"); the check applies common contractions to any line that misses them, and keeps Elizabeth's "anything else?" to at most one line in three.
 
 ### Laptop tools
 
@@ -119,9 +131,15 @@ class Arm(Protocol):
     def status(self) -> dict: ...        # {"connected": bool, "busy": bool, "torque": bool, "joints": {...}}
 ```
 
-- `run` blocks until the skill ends and returns `{"ok": bool, "result": "done" | "missed" | "stopped" | "error", "detail": str}`.
-- `on_phase` is called with: `start`, `at_target`, `gripped`, `lifted`, `put_back`, `missed`, `returning`, `done`, `error`.
-- Two classes: `RealArm` (serial port COM3) and `FakeArm` (sleeps for realistic durations, no hardware). The server uses `FakeArm` unless the environment variable `PHANTOM_ARM=real` is set.
+- `run` blocks until the skill ends and returns `{"ok": bool, "result": str, "detail": str}`, plus `"auto_rest": true` when the arm went to rest by itself first.
+- Results: `done`; fetch_bottle: `handed_over`, `put_back` (nobody took it), `missed`, `no_bottle` (no camera can see it), `out_of_reach`, `turn_failed`; and for every skill `stopped`, `error`, `busy`. `ok` is true for `done`, `handed_over` and `put_back`.
+- `on_phase` is called with: `auto_rest`, `start`, `seen`, `at_target`, `gripped`, `lifted`, `carrying`, `offering`, `handed_over`, `put_back`, `missed`, `returning`, `done`, `error`.
+  - fetch_bottle, in order: `start`, `seen`, `at_target`, `gripped`, `lifted`, `carrying`, `offering`, then `handed_over` or `put_back`, `returning`, `done`. Missed: `start`, `seen`, `at_target`, `missed`, `returning`, `done`. Turn failed: ... `carrying`, `put_back`, `returning`, `done`. Not seen: `start`, `done` (or `start`, `returning`, `done` after a wrist sweep). Out of reach: `start`, `seen`, `done`.
+  - rest: `start`, `returning`, `done`, with `put_back` after `start` when it first puts a held bottle down.
+- `stop()` holds every arm joint where it is at any stage, never switches torque off, and leaves the gripper's squeeze alone (a held bottle stays held).
+- After `stopped` or `error` the arm is out of rest. The next skill sends it to rest first by itself: the pipeline runs `rest` (its `arm` events carry `"auto": true`, starting with phase `auto_rest`, and the skill's result carries `auto_rest` with the rest result); a `gesture` that would follow is skipped. The arm does the same as a backstop when used directly (phase `auto_rest`, then the skill).
+- `status()` also gives `at_rest` and `holding` (the gripper squeezing something).
+- Two classes: `RealArm` (serial port COM3) and `FakeArm` (sleeps for realistic durations, no hardware). The server uses `FakeArm` unless the environment variable `PHANTOM_ARM=real` is set. FakeArm switches for fetch_bottle: `PHANTOM_FAKE_FETCH` (an outcome name), `PHANTOM_FAKE_OVERHEAD=0` (pretend the phone is off), `PHANTOM_FAKE_MISS=1`.
 - Only one skill runs at a time. A second request while busy is refused with result `busy`.
 
 ## HTTP and WebSocket API (backend/server.py, 127.0.0.1:8765)
@@ -140,7 +158,7 @@ class Arm(Protocol):
 | `merlin` | `chosen`, `say`, `audio_url`, `argued` (list of `{agent, say, audio_url}`, may be empty) |
 | `agent_state` | `agent`, `state`: `idle`, `listening`, `thinking`, `speaking`, `has_arm` |
 | `say` | `agent`, `text`, `audio_url` |
-| `arm` | `agent`, `skill`, `phase` |
+| `arm` | `agent`, `skill`, `phase`, and `auto: true` for an automatic rest |
 | `note` | `agent`, `text`, `kind`: `note` or `todo` |
 | `timer_done` | `agent`, `label` |
 | `error` | `where`, `message` |

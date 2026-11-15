@@ -3,13 +3,14 @@
     from backend.arm import make_arm, validate, SKILLS
     arm = make_arm()
     arm.run("grip_bottle", {"pace": 0.8, "hold_s": 5}, on_phase=print)
+    arm.run("fetch_bottle", {"pace": 0.6, "wait_s": 3}, on_phase=print)
 """
 import os
 
 from .fake import FakeArm
-from .skills import PHASES, RESULTS, SKILLS, STYLES, Arm, nominal_duration, validate
+from .skills import OK_RESULTS, PHASES, RESULTS, SKILLS, STYLES, Arm, nominal_duration, validate
 
-__all__ = ["make_arm", "FakeArm", "RealArm", "SKILLS", "STYLES", "PHASES", "RESULTS", "Arm",
+__all__ = ["make_arm", "FakeArm", "RealArm", "SKILLS", "STYLES", "PHASES", "RESULTS", "OK_RESULTS", "Arm",
            "validate", "nominal_duration"]
 
 

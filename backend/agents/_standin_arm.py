@@ -8,7 +8,7 @@ import threading
 import time
 from typing import Callable
 
-_SKILLS = {"grip_bottle", "point", "half_reach", "wave", "rest", "gesture"}
+_SKILLS = {"grip_bottle", "fetch_bottle", "point", "half_reach", "wave", "rest", "gesture"}
 
 
 class StandinArm:
@@ -43,6 +43,13 @@ class StandinArm:
                 if params.get("look_first"):
                     steps.append(("at_target", 1.0))
                 steps += [("gripped", 1.0 * f), ("lifted", 1.0 * f + hold), ("put_back", 1.5 * f), ("returning", 1.5 * f)]
+            elif skill == "fetch_bottle":
+                wait = float(params.get("wait_s", 3))
+                steps = [("start", 0.2), ("seen", 3.0), ("at_target", 3.0 * f)]
+                if params.get("look_first"):
+                    steps.append(("at_target", 1.0))
+                steps += [("gripped", 0.8), ("lifted", 1.9 * f), ("carrying", 2.0 * f), ("offering", 0.6 + wait / 2),
+                          ("handed_over", 1.5 * f), ("returning", 4.5 * f)]
             elif skill == "point":
                 steps = [("start", 0.2), ("at_target", 1.5 * f), ("returning", 2.0 + 1.2 * f)]
             elif skill == "half_reach":
@@ -62,7 +69,7 @@ class StandinArm:
             if not self._sleep(0.4):
                 return {"ok": False, "result": "stopped", "detail": "stopped"}
             on_phase("done")
-            return {"ok": True, "result": "done", "detail": f"pretend {skill}"}
+            return {"ok": True, "result": "handed_over" if skill == "fetch_bottle" else "done", "detail": f"pretend {skill}"}
         finally:
             with self._lock:
                 self._busy = False
