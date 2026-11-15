@@ -61,6 +61,7 @@ FETCH_CLOSE_SPEED = 500
 LIFT_UP = 170                             # shoulder ticks to raise the bottle off the table
 PERSON_PAN = (950, 3250)
 TUG_TICKS, TUG_TICKS_GRIP = 8, 6
+ROLL_REST = 2016         # the wrist roll at rest: jaws level
 TUG_MA = 70.0            # a joint drawing this much more or less current than when it settled is being pulled
 
 
@@ -458,8 +459,8 @@ class RealArm:
         holding = self._gripper_holding()
         if not holding:
             items.append((6, CLOSED, 0.6 * dur, 0.4 * dur))
-        if roll is not None:
-            items.append((5, roll, 0, dur))
+        # the wrist always comes home level, whatever a pick turned it to
+        items.append((5, ROLL_REST if roll is None else roll, 0, dur))
         self._blend(items, settle=False, acc=acc)
         return holding
 
@@ -720,6 +721,9 @@ class RealArm:
         pos = {i: self._rd(i, POSITION) for i in range(1, 5)}
         at_rest = all(abs(pos[i] - self.REST[i]) <= REST_TOL for i in range(1, 5))
         detail = "at rest"
+        if abs(self._rd(5, POSITION) - ROLL_REST) > 30:
+            # a pick or a handover left the wrist turned: bring it level again
+            self._blend([(5, ROLL_REST, 0, 0.9)], settle=False)
         if self._gripper_holding() and not at_rest:
             what = self._held["name"] if self._held else "bottle"
             self._put_down_here(1.0, self._held_tier)
@@ -789,7 +793,7 @@ class RealArm:
         """back_to_rest() from the script: one move, the gripper closes in the last 40 percent."""
         d = S.FETCH_REST_S * k
         self._fblend([(3, self.REST[3], 0, d), (2, self.REST[2], 0, (1 - LEAD) * d), (1, self.REST[1], 0, d),
-                      (4, self.REST[4], 0, d), (6, CLOSED, 0.6 * d, 0.4 * d)], settle=False, acc=acc)
+                      (4, self.REST[4], 0, d), (5, ROLL_REST, 0, d), (6, CLOSED, 0.6 * d, 0.4 * d)], settle=False, acc=acc)
 
     def _put_down_here(self, k, tier=None):
         """The script's recovery when the turn cannot finish: hold, pull in to the tuck, stand the
