@@ -1,5 +1,5 @@
-"""ssvep-calibrate and ssvep-run: the chooser page plus the reader, with the eyes-closed stop
-running the whole time and always taking priority over a choice."""
+"""ssvep-calibrate and ssvep-run: the chooser page plus the reader, with the stop (eyes
+closed, jaw clench, or both) running the whole time and always taking priority over a choice."""
 from __future__ import annotations
 
 import json
@@ -15,6 +15,7 @@ import numpy as np
 
 from . import speech
 from .chooser import ChooserState, serve
+from .clench import ClenchRule, detector_from
 from .dsp import contact, measured_rate
 from .link import ServerLink
 from .reader import Reader
@@ -278,16 +279,27 @@ class Gate:
 
     The stop goes first and always wins: while it is on, or alpha is already above the stop
     level (so it may be about to fire), nothing is chosen, any choice in progress is dropped,
-    and the decider stays blocked for its refractory time after the stop clears."""
+    and the decider stays blocked for its refractory time after the stop clears. The clench
+    stop, when given, follows the same rules: on, or above its threshold now, blocks choosing.
+    stop may be None when only the clench stop is in use."""
 
-    def __init__(self, stop: StopRule, decider: Decider):
+    def __init__(self, stop: StopRule | None, decider: Decider, clench: ClenchRule | None = None):
         self.stop = stop
         self.decider = decider
+        self.clench = clench
+        self.clench_event = None
 
-    def step(self, t: float, alpha: float, ok_stop: bool, scores, choosing: bool):
-        """Returns (stop event or None, chosen index or None, this window's guess, stop_near)."""
-        ev = self.stop.update(t, alpha, ok_stop)
-        stop_near = self.stop.active or (ok_stop and alpha > self.stop.stop_at)
+    def step(self, t: float, alpha: float, ok_stop: bool, scores, choosing: bool, clench: dict | None = None):
+        """Returns (eyes-closed stop event or None, chosen index or None, this window's guess,
+        stop_near). The clench stop's event of this tick is left in self.clench_event.
+        clench is the detector's measurement for this tick (score, tilt, ok)."""
+        ev = self.stop.update(t, alpha, ok_stop) if self.stop is not None else None
+        stop_near = self.stop is not None and (self.stop.active or (ok_stop and alpha > self.stop.stop_at))
+        self.clench_event = None
+        if self.clench is not None and clench is not None:
+            self.clench_event = self.clench.update(t, clench["score"], clench["tilt"], clench["ok"])
+        if self.clench is not None and self.clench.near(clench):
+            stop_near = True
         if stop_near or not choosing or scores is None:
             self.decider.suppress(t)
             return ev, None, None, stop_near
@@ -336,7 +348,8 @@ class Requester:
 def parse_script(text: str, items: list[str]) -> list[tuple[float, str, object]]:
     """'0:none,3:sharpie,12:closed,15:open' -> [(0, 'gaze', None), (3, 'gaze', 2), ...].
     Times are seconds after the flicker starts; a target is an item name, its number from 1,
-    none, closed or open."""
+    none, closed or open. Simulator muscle actions: clench and release, talk and quiet, blink
+    and turn; they come out as (t, kind, value) with kind clench, talk, blink or turn."""
     out = []
     lower = [i.lower() for i in items]
     for part in text.split(","):
@@ -348,6 +361,12 @@ def parse_script(text: str, items: list[str]) -> list[tuple[float, str, object]]
             out.append((float(t), "gaze", None))
         elif what in ("closed", "open"):
             out.append((float(t), "eyes", what == "closed"))
+        elif what in ("clench", "release"):
+            out.append((float(t), "clench", what == "clench"))
+        elif what in ("talk", "quiet"):
+            out.append((float(t), "talk", what == "talk"))
+        elif what in ("blink", "turn"):
+            out.append((float(t), what, None))
         elif what in lower:
             out.append((float(t), "gaze", lower.index(what)))
         elif what.isdigit() and 1 <= int(what) <= len(items):
@@ -359,7 +378,9 @@ def parse_script(text: str, items: list[str]) -> list[tuple[float, str, object]]
 
 def ssvep_run(reader: Reader, cfg: SsvepConfig, cal: dict, link: ServerLink, dry: bool = False, sim=None,
               seconds: float | None = None, open_browser: bool = True, auto: bool = False,
-              script: str | None = None, log_path: Path | None = None) -> dict:
+              script: str | None = None, log_path: Path | None = None, clench_cal: dict | None = None,
+              stops: set | None = None) -> dict:
+    stops = set(stops or {"alpha"})
     if len(cal["frames"]) != len(cfg.items):
         raise SystemExit(f"calibration has {len(cal['frames'])} tiles but there are {len(cfg.items)} items; "
                          "run ssvep-calibrate again with these items")
@@ -389,18 +410,22 @@ def ssvep_run(reader: Reader, cfg: SsvepConfig, cal: dict, link: ServerLink, dry
         else:
             can_choose = False
             warning = (f"This screen runs at {refresh:.0f} Hz but calibration was done at {cal_refresh:.0f} Hz. "
-                       "Choosing is off; the eyes-closed stop still works. Calibrate again on this screen.")
+                       "Choosing is off; the stop still works. Calibrate again on this screen.")
             print("WARNING:", warning)
     rates = rates_from_frames(refresh, frames)
     rates_hz = [r.hz for r in rates]
     state.set(frames=frames, rates_hz=rates_hz, warning=warning, status="Press Start to begin choosing.")
     print(f"screen {refresh:.2f} Hz; rates " + ", ".join(f"{it} {r.hz:.2f} Hz" for it, r in zip(cfg.items, rates)))
-    stop = StopRule(cal["stop_alpha"], cal["release_alpha"])
+    stop = StopRule(cal["stop_alpha"], cal["release_alpha"]) if "alpha" in stops else None
+    crule = ClenchRule.from_calibration(clench_cal) if "clench" in stops else None
+    det = detector_from(clench_cal) if crule else None
     decider = Decider(th, cfg.refractory_s)
-    gate = Gate(stop, decider)
+    gate = Gate(stop, decider, crule)
     req = Requester(cfg.server, dry)
     print(f"run: choose when score >= {th.threshold:.3f} and {th.margin:.3f} ahead for {th.hold} windows; "
-          f"stop above notched alpha {stop.stop_at:.1f}" + ("  (dry: nothing is sent)" if dry else ""))
+          + (f"eyes-closed stop above notched alpha {stop.stop_at:.1f}" if stop else "")
+          + (f"{'; ' if stop else ''}clench stop at {crule.threshold:.1f} x resting" if crule else "")
+          + ("  (dry: nothing is sent)" if dry else ""))
 
     events = parse_script(script, cfg.items) if script else []
     log = open(log_path, "w", encoding="utf-8") if log_path else None
@@ -423,8 +448,10 @@ def ssvep_run(reader: Reader, cfg: SsvepConfig, cal: dict, link: ServerLink, dry
                     _, kind, val = events.pop(0)
                     if kind == "gaze":
                         state.set_gaze(val, None)
-                    else:
+                    elif kind == "eyes":
                         state.set_gaze(state.snapshot()["gaze"], val)
+                    else:
+                        sim.act(kind, val)
             f = front.tick(rates_hz)
             if f is None:
                 continue
@@ -432,7 +459,12 @@ def ssvep_run(reader: Reader, cfg: SsvepConfig, cal: dict, link: ServerLink, dry
             summary["ticks"] += 1
             ok_stop = not f["stale"] and f["n_good"] >= front.min_good_for_stop()
             choosing = can_choose and snap["flicker"] and not f["stale"]
-            ev, choice, guess, stop_near = gate.step(f["t"], f["alpha"], ok_stop, f["scores"], choosing)
+            m = None
+            if det is not None:
+                m = det.measure(reader.data[:, front.cols], f["fs"])
+                m["ok"] = m["ok"] and not f["stale"]
+            ev, choice, guess, stop_near = gate.step(f["t"], f["alpha"], ok_stop, f["scores"], choosing, m)
+            cev = gate.clench_event
             if snap["flicker"] != last_flicker:
                 last_flicker = snap["flicker"]
                 state.set(status="Choosing. Look at one tile for a few seconds." if last_flicker
@@ -441,17 +473,31 @@ def ssvep_run(reader: Reader, cfg: SsvepConfig, cal: dict, link: ServerLink, dry
                 summary["stops"].append(round(el, 2))
                 print(f"{el:7.2f}s  STOP  notched alpha {f['alpha']:.1f} > {stop.stop_at:.1f} for 1.5 s", flush=True)
                 link.post("/api/stop", None, loud=True)
-                link.event("stop", loud=True, alpha=round(f["alpha"], 2), threshold=round(stop.stop_at, 2), n_good=f["n_good"])
+                link.event("stop", loud=True, trigger="alpha", alpha=round(f["alpha"], 2),
+                           threshold=round(stop.stop_at, 2), n_good=f["n_good"])
                 speech.beep(220, 450, block=False)
             elif ev == "clear":
                 summary["clears"].append(round(el, 2))
                 print(f"{el:7.2f}s  clear notched alpha {f['alpha']:.1f} < {stop.release_at:.1f}", flush=True)
-                link.event("clear", loud=True, alpha=round(f["alpha"], 2))
+                link.event("clear", loud=True, trigger="alpha", alpha=round(f["alpha"], 2))
+            if cev == "stop":
+                summary["stops"].append(round(el, 2))
+                summary.setdefault("clench_stops", []).append(round(el, 2))
+                print(f"{el:7.2f}s  STOP (jaw clench)  level {m['score']:.1f} x resting >= {crule.threshold:.1f}", flush=True)
+                link.post("/api/stop", None, loud=True)
+                link.event("stop", loud=True, trigger="clench", level=round(m["score"], 2),
+                           threshold=round(crule.threshold, 2), n_good=f["n_good"])
+                speech.beep(220, 450, block=False)
+            elif cev == "clear":
+                summary["clears"].append(round(el, 2))
+                print(f"{el:7.2f}s  clear (jaw relaxed)  level {m['score']:.1f}", flush=True)
+                link.event("clear", loud=True, trigger="clench", level=round(m["score"], 2))
+            stopped = (stop is not None and stop.active) or (crule is not None and crule.active)
 
             if stop_near:
                 summary["suppressed_by_stop"] += 1
             idx, prog = decider.progress()
-            state.set(stopped=stop.active, progress={"index": idx, "value": prog})
+            state.set(stopped=stopped, progress={"index": idx, "value": prog})
 
             if choice is not None:
                 item = cfg.items[choice]
@@ -467,12 +513,14 @@ def ssvep_run(reader: Reader, cfg: SsvepConfig, cal: dict, link: ServerLink, dry
                 last_print = time.monotonic()
                 sc = "--" if f["scores"] is None else " ".join(f"{v:.2f}" for v in th.corrected(f["scores"]))
                 gtxt = "-" if guess is None else cfg.items[guess]
-                print(f"{el:7.2f}s  good {f['n_good']:2d}  alpha {f['alpha']:7.1f}  scores {sc}  guess {gtxt:10s}"
-                      f"  {'STOPPED' if stop.active else ''}{'' if snap['flicker'] else '  (no flicker)'}", flush=True)
+                ctxt = "" if m is None else f"  clench {m['score']:5.1f}"
+                print(f"{el:7.2f}s  good {f['n_good']:2d}  alpha {f['alpha']:7.1f}{ctxt}  scores {sc}  guess {gtxt:10s}"
+                      f"  {'STOPPED' if stopped else ''}{'' if snap['flicker'] else '  (no flicker)'}", flush=True)
             if log:
                 log.write(json.dumps({"el": round(el, 3), "alpha": round(f["alpha"], 2), "n_good": f["n_good"],
                                       "scores": None if f["scores"] is None else [round(float(v), 4) for v in f["scores"]],
-                                      "guess": guess, "stopped": stop.active, "event": ev,
+                                      "clench": None if m is None else round(m["score"], 2),
+                                      "guess": guess, "stopped": stopped, "event": ev or cev,
                                       "choice": None if choice is None else cfg.items[choice]}) + "\n")
     except KeyboardInterrupt:
         print("stopped by keyboard")

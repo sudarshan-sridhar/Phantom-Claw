@@ -1,4 +1,4 @@
-"""Everything on the desk from one overhead picture and one Gemini call.
+﻿"""Everything on the desk from one overhead picture and one Gemini call.
 
 Pure code: the prompt, the parser for Gemini's answer and the name matching. The camera and the
 network live in backend.vision.Vision.scene(), so tests can feed a canned answer straight in.
@@ -23,8 +23,8 @@ TIERS = ("tall", "can", "low")
 # Known names pick the tier; Gemini's height guess is used only for names not listed here.
 # Checked in this order, so "juice bottle" is tall and "juice can" is can.
 _LOW_WORDS = ("sharpie", "marker", "pen", "pencil", "scissors", "scissor", "highlighter", "screwdriver", "spoon",
-              "fork", "knife", "chopstick", "brush", "earbud", "earphone", "airpod", "glue")
-_CAN_WORDS = ("can", "red bull", "redbull", "cup", "mug", "glass", "tin")
+              "fork", "knife", "chopstick", "brush", "earbud", "earphone", "airpod")
+_CAN_WORDS = ("glue", "can", "red bull", "redbull", "cup", "mug", "glass", "tin")
 _TALL_WORDS = ("bottle", "flask", "thermos")
 _CAN_LATE = ("juice", "soda", "coke", "pepsi", "sprite", "drink")
 CUP_WORDS = ("cup", "mug", "glass")       # gripped by pinching the wall nearest the arm, not the centre
@@ -205,6 +205,14 @@ def parse_scene(raw, table, want=None, max_items=15):
             match = match_name(items, m)
         if match is None:
             match = match_name(items, want)
+        # The camera may call it something else ("white marker" for a glue stick). What the
+        # person asked for decides how it is gripped when that name is a known one.
+        if match is not None:
+            asked_tier, source = tier_for(want)
+            if source == "name" and asked_tier != match["tier"]:
+                match["tier"] = asked_tier
+                if asked_tier != "low":
+                    match["axis_deg"] = None
     return {"items": items, "person": person, "match": match}
 
 

@@ -57,6 +57,43 @@ def test_gestures_are_not_counted_as_arm_jobs(tmp_path):
     assert len(rows) == 1 and rows[0]["agent"] == "king" and rows[0]["arm_skill"] is None
 
 
+def test_a_desk_plan_is_one_arm_job(tmp_path):
+    store = make_store(tmp_path)
+    col = Collector(store)
+    t0 = time.time() - 60
+    col.handle({"type": "request", "text": "hand me the sharpie", "named_agent": "ban"}, t0)
+    col.handle({"type": "say", "agent": "ban", "text": "Sure.", "audio_url": "y"}, t0 + 1)
+    col.handle({"type": "agent_state", "agent": "ban", "state": "has_arm"}, t0 + 1.5)
+    col.handle({"type": "arm_plan", "agent": "ban", "phase": "start", "steps": []}, t0 + 2)
+    steps = []
+    at = t0 + 2
+
+    def step(i, skill, result, ok, **flags):
+        nonlocal at
+        for p in ("start", "done"):
+            at += 1
+            col.handle({"type": "arm", "agent": "ban", "skill": skill, "phase": p, "step": i, "steps": 3, **flags}, at)
+        rec = {"step": i, "skill": skill, "params": {}, "result": result, "ok": ok, "detail": "", **flags}
+        steps.append(rec)
+        col.handle({"type": "arm_step", "agent": "ban", **rec}, at)
+    step(0, "look", "done", True)
+    step(1, "pick", "holding", True)
+    step(2, "hand_over", "not_taken", False)
+    step(2, "place", "placed", True, recovery=True)
+    col.handle({"type": "arm_plan", "agent": "ban", "phase": "done", "result": "not_taken", "ok": False,
+                "steps": steps}, at + 1)
+    col.handle({"type": "agent_state", "agent": "ban", "state": "idle"}, at + 2)
+    store.flush()
+    rows = store.select("requests", 0)
+    assert len(rows) == 1
+    assert (rows[0]["arm_skill"], rows[0]["arm_result"], rows[0]["arm_ms"]) == ("plan", "put back", 9000)
+    # stopped wins; a single skill job is recorded as before
+    from backend.record.collector import plan_outcome
+    assert plan_outcome(steps[:2] + [{"skill": "hand_over", "result": "stopped", "ok": False}], "stopped") == "stopped"
+    assert plan_outcome([{"skill": "pick", "result": "missed", "ok": False}] * 2, "missed") == "missed"
+    assert plan_outcome(steps[:2] + [{"skill": "hand_over", "result": "handed_over", "ok": True}]) == "handed over"
+
+
 def test_outcomes():
     assert outcome("grip_bottle", ["start", "at_target", "missed", "returning", "done"]) == "missed"
     assert outcome("grip_bottle", ["start", "gripped", "lifted", "put_back", "done"]) == "put back"

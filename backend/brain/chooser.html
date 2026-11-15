@@ -74,6 +74,9 @@
   }
   .slot.highlight .tile { outline-color: var(--lilac); }
   .slot.simgaze .tile { box-shadow: 0 0 0 3px var(--sand); }
+  /* scan mode: one tile lit at a time, no flicker */
+  .slot.lit .tile { background: var(--sand); outline-color: var(--white); }
+  .slot.lit .name { color: var(--sand); }
   .name { font-size: clamp(20px, 2.6vw, 40px); font-weight: 600; text-align: center; }
   .look { font-size: 18px; color: var(--lilac); height: 22px; }
   .bar { width: min(14vw, 34vh); height: 12px; background: var(--black); }
@@ -112,8 +115,8 @@
 </head>
 <body>
 <header>
-  <span class="title">Look to choose</span>
-  <span class="warn">Warning: this page flickers. Flicker can set off seizures in people with photosensitive epilepsy.</span>
+  <span class="title" id="title">Look to choose</span>
+  <span class="warn" id="warnTop">Warning: this page flickers. Flicker can set off seizures in people with photosensitive epilepsy.</span>
   <span class="grow"></span>
   <span id="screen" class="small">measuring screen...</span>
   <button id="startTop">Start</button>
@@ -123,9 +126,9 @@
   <div class="row" id="row"></div>
   <div class="centre" id="centre"></div>
   <div class="gate" id="gate">
-    <p class="big">This page flickers.</p>
-    <p>Flicker can set off seizures in people with photosensitive epilepsy. If you, or anyone who can see this screen, has ever had a seizure or a fit, do not go on.</p>
-    <p>Nothing moves until you press Start. Press Esc at any time to stop the flicker.</p>
+    <p class="big" id="gateBig">This page flickers.</p>
+    <p id="gateText">Flicker can set off seizures in people with photosensitive epilepsy. If you, or anyone who can see this screen, has ever had a seizure or a fit, do not go on.</p>
+    <p id="gateText2">Nothing moves until you press Start. Press Esc at any time to stop the flicker.</p>
     <button id="start">Start</button>
     <p class="small" id="gateNote">Measuring the screen first. This takes about two seconds.</p>
   </div>
@@ -133,7 +136,7 @@
 <footer>
   <div class="prompt" id="prompt"></div>
   <div class="chosen" id="chosen"></div>
-  <div class="stopped" id="stopped">Stopped: eyes closed. Open your eyes to go on.</div>
+  <div class="stopped" id="stopped">Stopped. Open your eyes and relax your jaw to go on.</div>
   <div class="small" id="status"></div>
   <div class="small" id="simhelp" hidden>Simulator: click a tile to look at it, click empty space to look away, press E to close or open the eyes.</div>
 </footer>
@@ -151,6 +154,19 @@
   let dropped = 0;
   let lastTs = 0;
   let refresh = null;
+  let scanMode = false;       // scan-run: tiles lit in turn, chosen with a jaw clench, no flicker
+
+  function setScanMode() {
+    scanMode = true;
+    document.title = "Clench to choose";
+    $("title").textContent = "Clench to choose";
+    $("warnTop").textContent = "This page does not flicker.";
+    $("gateBig").textContent = "Clench to choose";
+    $("gateText").textContent = "The tiles light up one at a time. When the one you want is lit, clench your jaw briefly, about half a second. To stop the arm, clench and hold until you hear the low beep.";
+    $("gateText2").textContent = "Press Start to begin. Press Esc at any time to pause.";
+    $("stopped").textContent = "Stopped: long clench. Relax your jaw to go on.";
+    $("simhelp").textContent = "Simulator: press S for a short clench, L for a long clench, B for a blink.";
+  }
 
   function post(path, body) {
     return fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
@@ -189,7 +205,7 @@
       slot.querySelector(".name").textContent = name;
       slot.querySelector(".tile").addEventListener("click", (e) => {
         e.stopPropagation();
-        if (state && state.sim) post("/api/sim", { gaze: i, eyes_closed: state.eyes_closed });
+        if (state && state.sim && !scanMode) post("/api/sim", { gaze: i, eyes_closed: state.eyes_closed });
       });
       row.appendChild(slot);
       tiles.push(slot);
@@ -219,18 +235,18 @@
   }
 
   function start() {
-    if (!frames || flickering) return;
+    if ((!frames && !scanMode) || flickering) return;
     try { if (!params.has("autostart")) document.documentElement.requestFullscreen().catch(() => {}); } catch (e) {}
     $("gate").classList.add("hidden");
     flickering = true; t0 = 0; lastTs = 0; dropped = 0;
     post("/api/flicker", { on: true });
-    requestAnimationFrame(loop);
+    if (!scanMode) requestAnimationFrame(loop);
   }
 
   function stop() {
     if (!flickering) return;
     flickering = false;
-    for (let i = 0; i < tiles.length; i++) paint(i, false);
+    if (!scanMode) for (let i = 0; i < tiles.length; i++) paint(i, false);
     post("/api/flicker", { on: false });
     $("gate").classList.remove("hidden");
     $("gateNote").textContent = "Stopped. Press Start to go on.";
@@ -247,8 +263,9 @@
     $("simhelp").hidden = !state.sim;
     tiles.forEach((slot, i) => {
       const hl = state.highlight === i;
-      slot.classList.toggle("highlight", hl);
-      slot.querySelector(".look").textContent = hl ? "look here" : "";
+      slot.classList.toggle("highlight", hl && !scanMode);
+      slot.classList.toggle("lit", scanMode && state.lit === i);
+      slot.querySelector(".look").textContent = hl && !scanMode ? "look here" : "";
       slot.classList.toggle("simgaze", state.sim && state.gaze === i);
       const p = state.progress && state.progress.index === i ? state.progress.value : 0;
       slot.querySelector(".fill").style.width = Math.round(p * 100) + "%";
@@ -262,7 +279,13 @@
       const first = !state;
       const itemsChanged = state && JSON.stringify(state.items) !== JSON.stringify(s.items);
       state = s;
+      if (first && s.mode === "scan") {
+        setScanMode();
+        $("gateNote").textContent = "Ready.";
+        $("screen").textContent = "";
+      }
       if (first || itemsChanged) build();
+      if (first && scanMode && params.has("autostart") && s.sim) start();
       if (s.frames && JSON.stringify(s.frames) !== JSON.stringify(frames)) {
         frames = s.frames;
         $("screen").textContent = "screen " + (refresh || s.refresh || 0).toFixed(2) + " Hz, rates " +
@@ -282,16 +305,23 @@
   $("stopTop").addEventListener("click", stop);
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") stop();
+    if (scanMode && state && state.sim) {
+      const k = e.key.toLowerCase();
+      if (k === "s") post("/api/sim", { act: "short" });
+      if (k === "l") post("/api/sim", { act: "long" });
+      if (k === "b") post("/api/sim", { act: "blink" });
+      return;
+    }
     if ((e.key === "e" || e.key === "E") && state && state.sim) post("/api/sim", { gaze: state.gaze, eyes_closed: !state.eyes_closed });
   });
   document.addEventListener("fullscreenchange", () => { if (!document.fullscreenElement) stop(); });
   document.addEventListener("visibilitychange", () => { if (document.hidden) stop(); });
-  $("main").addEventListener("click", () => { if (state && state.sim && flickering) post("/api/sim", { gaze: null, eyes_closed: state.eyes_closed }); });
+  $("main").addEventListener("click", () => { if (state && state.sim && flickering && !scanMode) post("/api/sim", { gaze: null, eyes_closed: state.eyes_closed }); });
 
   measure().then((hz) => {
     refresh = hz;
     period = 1000 / hz;
-    $("screen").textContent = "screen " + hz.toFixed(2) + " Hz";
+    if (!scanMode) $("screen").textContent = "screen " + hz.toFixed(2) + " Hz";
     post("/api/display", { refresh: hz });
   });
   poll();

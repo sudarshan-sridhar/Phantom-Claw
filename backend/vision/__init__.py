@@ -122,11 +122,11 @@ class Vision:
         boxes = parse_boxes(gemini.ask_json(f, WRIST_PROMPT, size=(960, 540), timeout=10))
         return {"picture": True, **boxes}
 
-    def wrist_aim(self, name=None, shape="auto", save_to=None, use_gemini=True):
+    def wrist_aim(self, name=None, shape="auto", save_to=None, use_gemini=True, opening=None):
         """Read one upright wrist picture for pick's last aim (backend/vision/wrist_aim.py).
         {"picture": bool, "aim": reading or None, "tried": what OpenCV and Gemini said}.
         save_to: path for the picture (640 x 360); a copy with the reading drawn on it goes
-        next to it with _read added to the name."""
+        next to it with _read added to the name. opening: the gripper's ticks (where the jaw tips are)."""
         from . import wrist_aim
         if self._wrist is None:
             self._wrist = cameras.WristCamera(self.wrist_index)
@@ -134,7 +134,7 @@ class Vision:
         if f is None:
             return {"picture": False, "aim": None, "tried": {}}
         tried = {}
-        aim = wrist_aim.read_aim(f, name=name, shape=shape, use_gemini=use_gemini, log=tried)
+        aim = wrist_aim.read_aim(f, name=name, shape=shape, use_gemini=use_gemini, log=tried, opening=opening)
         if save_to:
             try:
                 import cv2

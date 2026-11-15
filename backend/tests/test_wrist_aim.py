@@ -292,6 +292,136 @@ def test_real_stop_during_the_aim(low_setup):
     assert out["result"] == "done" and bus.torque_off_writes() == []
 
 
+# compact items: reach and jaw opening (the earbuds case miss on 2026-11-15)
+def compact(cy, x=452.0, width=120.0, bottom=None, conf=0.9):
+    r = W.point_reading(x, "gemini", conf)
+    h = width * 0.8
+    return W.extents(r, x - width / 2, cy - h / 2, x + width / 2, cy + h / 2 if bottom is None else bottom)
+
+
+def test_reader_measures_a_cut_off_wide_case():
+    # the miss picture as Gemini should answer it: x 310 to 515, from y 250 down past the bottom edge
+    r = W.parse_gemini({"found": True, "box": [694, 484, 1000, 805], "ends": None, "long": False,
+                        "confidence": 0.8}, "round", opening=1750)
+    assert r["compact"] and r["touches_bottom"] and 200 <= r["width_px"] <= 210 and r["between_jaws"]
+    assert W.jaw_tips(1750) == (300.0, 520.0) and W.jaw_tips(2400)[1] > 640
+    # a compact OpenCV blob is never sure enough alone, so Gemini is asked
+    assert W.AIM["compact_cv_conf"] < W.AIM["cv_min_conf"]
+    # a long item's Gemini box carries no compact fields: long items aim as before
+    assert "compact" not in W.parse_gemini({"box": [100, 500, 900, 560], "ends": None, "confidence": 0.9}, "long")
+
+
+def test_aim_step_reach_for_compact_items():
+    A = desk.WRIST_AIM
+    s = desk.aim_step(compact(300), 2016, 2066, 30.0, reach_range=(18, 40))
+    assert s["roll"] is None and s["pan"] is None and s["reach"] == pytest.approx(30 - 65 * 0.035, abs=0.01)
+    s = desk.aim_step(compact(120), 2016, 2066, 30.0)                 # far up the picture: move out, capped
+    assert s["d_reach"] == A["max_reach_step_cm"] and s["capped"]
+    s = desk.aim_step(compact(330, bottom=360), 2016, 2066, 30.0)     # cut off at the bottom edge: back
+    assert s["d_reach"] == -A["max_reach_step_cm"] and "bottom edge" in s["why"]
+    s = desk.aim_step(compact(250), 2016, 2066, 30.0)                 # within 30 px of the target row
+    assert s["done"] and "row 250" in s["why"]
+    s = desk.aim_step(compact(300, x=560), 2016, 2066, 30.0)          # pan comes before reach
+    assert s["pan"] is not None and s["reach"] is None
+    s = desk.aim_step(compact(330, bottom=360), 2016, 2066, 19.0, reach_range=(18, 40))   # at the end of the reach
+    assert s["d_reach"] == pytest.approx(-1.0) and desk.aim_step(compact(330, bottom=360), 2016, 2066, 18.0,
+                                                                   reach_range=(18, 40))["done"]
+    # a long reading never moves the reach, whatever its numbers
+    assert desk.aim_step({"angle_deg": 0.0, "offset_px": 0.0, "centre_y": 100}, 2016, 2066, 30.0)["done"]
+
+
+def test_jaw_opening_from_width():
+    assert desk.jaw_opening(80.0, 1750) is None                        # a pen: the opening will do
+    o = desk.jaw_opening(205.0, 1750)                                  # the earbuds case
+    assert o == 1750 + round((205 - 220) / 0.5) + desk.WRIST_AIM["open_margin_ticks"]
+    assert W.jaw_gap(o) >= 205 + 50
+    assert desk.jaw_opening(600.0, 1750) == desk.WRIST_AIM["open_max"] <= 2600
+
+
+def test_compact_items_start_at_the_taught_roll():
+    from backend.vision.table import GripTier
+    spot = lambda r: {"r_cm": r, "roll": 2016, "rel_axis_deg": 0.0, "pan": 2066,
+                      "via": {"lift": 1900, "elbow": 2700, "wrist_flex": 2173},
+                      "grasp": {"lift": 2050, "elbow": 2700, "wrist_flex": 2173}}
+    tiers = {"low": GripTier("low", [spot(22), spot(38)], open_value=1750, closed=1448)}
+    case = {"name": "earbuds case", "tier": "low", "x_cm": -14, "y_cm": 26, "dist_cm": 29.5, "bearing": -28,
+            "pan": 2300, "axis_deg": -30.0}
+    assert desk.pick_plan(case, tiers, (734, 3360))["roll"] == 2016
+    pen = {**case, "name": "sharpie"}
+    assert desk.pick_plan(pen, tiers, (734, 3360))["roll"] != 2016
+
+
+def test_fake_compact_too_near_then_corrected_in_two_rounds():
+    arm = low_fake()
+    arm.scene_items.append({"name": "earbuds case", "x_cm": 0.0, "y_cm": 30.0, "tier": "low", "graspable": True,
+                            "axis_deg": -30.0})
+    arm.wrist_reader = [compact(300), compact(240)]
+    out, ph = frun(arm, "pick", {"target": "earbuds case"})
+    assert out["result"] == "holding", out
+    assert [r["done"] for r in out["aim"]] == [False, True] and out["aim"][0]["d_reach"] < -2
+    assert "reach -2.3 cm" in out["detail"] and "reach" in aiming(ph)[0]
+
+
+def test_real_compact_too_near_then_corrected(low_setup):
+    desk_items = DESK + [{"name": "earbuds case", "x_cm": 4.0, "y_cm": 30.0, "tier": "low", "axis_deg": -30.0}]
+    arm, bus, vis, clock = make_real(scene_items=desk_items, setup_dir=low_setup)
+    arm.aim_setting = "low"
+    lifts = []
+
+    def read(n, roll, pan):
+        lifts.append(bus.pos(2))
+        return [compact(300), compact(240)][n - 1] if n <= 2 else None
+    vis.aim_readings = read
+    out, ph = rrun(arm, "pick", {"target": "earbuds case", "pace": 1.0})
+    assert out["result"] == "holding", out
+    assert len(lifts) == 2 and lifts[1] < lifts[0] - 20        # moved in toward the base (lower lift)
+    assert [r["done"] for r in out["aim"]] == [False, True] and abs(out["aim"][0]["d_reach"] + 2.28) < 0.05
+    assert vis.aim_openings[0] is not None                      # the reader is told where the jaws are
+    assert bus.bad_goals() == []
+
+
+def test_real_cut_off_moves_back_then_looks_again(low_setup):
+    desk_items = DESK + [{"name": "earbuds case", "x_cm": 4.0, "y_cm": 30.0, "tier": "low"}]
+    arm, bus, vis, clock = make_real(scene_items=desk_items, setup_dir=low_setup)
+    arm.aim_setting = "low"
+    vis.aim_readings = [compact(330, bottom=360), compact(320, bottom=360), compact(235)]
+    out, ph = rrun(arm, "pick", {"target": "earbuds case", "pace": 1.0})
+    assert out["result"] == "holding"
+    assert [r["d_reach"] for r in out["aim"][:2]] == [-3.0, -3.0] and out["aim"][2]["done"]
+    assert len(vis.aim_looks) == 3 and "bottom edge" in aiming(ph)[0]
+
+
+def test_real_wide_item_opens_wider_and_is_held(low_setup):
+    desk_items = DESK + [{"name": "earbuds case", "x_cm": 4.0, "y_cm": 30.0, "tier": "low"}]
+    arm, bus, vis, clock = make_real(scene_items=desk_items, setup_dir=low_setup)
+    arm.aim_setting = "low"
+    bus.cap = 1720                       # a 5 cm case stops the jaws far out (the pen stopped at 1448)
+    vis.aim_readings = [compact(240, width=205.0)]
+    out, ph = rrun(arm, "pick", {"target": "earbuds case", "pace": 1.0})
+    assert out["result"] == "holding", out
+    want = desk.jaw_opening(205.0, 1700)
+    assert out["aim"][-1]["opened"] == want > 1720 and "jaws opened" in out["detail"]
+    assert any("opening the jaws" in p for p in ph)
+    assert abs(out["held"]["x_cm"] - 4.0) < 0.01 and arm.status()["holding"]
+    assert bus.bad_goals() == []
+    # without opening wider the jaws start inside the case and push it away: a miss
+    arm, bus, vis, clock = make_real(scene_items=desk_items, setup_dir=low_setup)
+    arm.aim_setting = "low"
+    bus.cap = 1720
+    vis.aim_readings = [compact(240, width=60.0)]
+    out, _ = rrun(arm, "pick", {"target": "earbuds case", "pace": 1.0})
+    assert out["result"] == "missed"
+
+
+def test_real_compact_closed_on_nothing_is_still_a_miss(low_setup):
+    desk_items = DESK + [{"name": "earbuds case", "x_cm": 4.0, "y_cm": 30.0, "tier": "low"}]
+    arm, bus, vis, clock = make_real(scene_items=desk_items, setup_dir=low_setup, grip_ok=False)
+    arm.aim_setting = "low"
+    vis.aim_readings = [compact(240, width=205.0)]
+    out, _ = rrun(arm, "pick", {"target": "earbuds case", "pace": 1.0})
+    assert out["result"] == "missed" and not bus.holding
+
+
 def test_real_tall_does_not_aim_by_default(low_setup):
     arm, bus, vis, clock = make_real(scene_items=DESK, setup_dir=low_setup)
     arm.aim_setting = None

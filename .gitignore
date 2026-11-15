@@ -42,3 +42,6 @@ setup/brain_calibration.json
 backend/record/test_out/
 setup/brain_ssvep.json
 backend/brain/test_out/
+setup/brain_clench.json
+setup/wrist_samples/
+setup/last_wrist_aim_*.jpg

@@ -48,10 +48,46 @@ Other switches: `--mute` (no speech or beeps), `--seconds N` (stop after N secon
 
 All to the server on 127.0.0.1:8765:
 
-- `POST /api/stop` when the stop fires
-- `POST /api/event` with `{"type": "brain", "state": "stop" | "clear" | "focus" | "no_signal", ...}`. Focus has `value` (0 to 1) and `frozen` (true while a jaw clench is holding it still).
+- `POST /api/stop` when the stop fires (either trigger)
+- `POST /api/event` with `{"type": "brain", "state": "stop" | "clear" | "focus" | "no_signal", ...}`. Stop and clear carry `trigger`: `"alpha"` (eyes closed) or `"clench"`. Focus has `value` (0 to 1) and `frozen` (true while a jaw clench is holding it still).
 
 If the server is down, or has no /api/event, the reader says so once and keeps going.
+
+# Jaw-clench stop
+
+Clench your teeth hard for about half a second and the arm stops. Relax your jaw and the stop clears about a second later. It sends the same stop as closing your eyes.
+
+This is a muscle signal, not a brain signal. Clenching fires the jaw and neck muscles, and the puck picks up their electrical activity through the scalp: a burst of fast, broadband noise on every pin at once. The reader watches 45 to 100 Hz (leaving out 55 to 65 Hz for mains hum) and compares it with your own resting level. It is there because on some heads, the owner's included, closing the eyes barely changes alpha, so the eyes-closed stop cannot be trusted.
+
+What it ignores, and why:
+
+- Blinks and head movement put most of their power below 20 Hz. The stop also needs the fast band to rise at least twice as much as the slow band, so even a large slow swing or a pin popping cannot fire it.
+- Talking is the same kind of muscle noise, but weaker and broken up by syllables. Calibration measures your talking and puts the threshold above it, and the clench has to stay above the threshold for 0.4 s.
+- The chooser's flicker response sits under 45 Hz and is a few microvolts.
+
+The likeliest false stop is a quick, hard head turn, because the neck muscles under the puck tense up. That has only been tried on the simulator.
+
+Steps (puck seated, power bank, no PiEEG tab open):
+
+1. Judge the seat, 20 seconds, nothing to do but sit still:
+
+       python -m backend.brain signal --board
+
+   One line a second: alpha, the 45 to 100 Hz level, the 60 Hz mains level and good pins, and the medians spoken at the end. You want 10 or more good pins, and mains well under the 45 to 100 Hz level. A high mains level means a charger or power brick is too close.
+
+2. Calibrate, about a minute and a half, all spoken:
+
+       python -m backend.brain clench-calibrate --board
+
+   Rest for 10 s. Then five clenches: bite down hard at each high beep and let go at the low beep (2 s each, 3 s apart). Then count out loud in a quiet, normal voice for 10 s. Then five hard blinks, one at each beep. It prints how strong each clench was against your resting level, the strongest thing that was not a clench, and the margin between them, saves `setup\brain_clench.json`, and says whether the result is good. Good means every clench cleared the threshold, nothing else did, and the weakest clench was at least twice the strongest other thing. If it says not good, clench harder, press the puck down and run it again. `--quick` does three of each.
+
+3. Run with the clench stop:
+
+       python -m backend.brain run --board --stop clench
+
+   `--stop` takes `alpha`, `clench` or `both`. Without it you get both when both calibrations exist and clench alone when only that one does. If the eyes-closed calibration itself warned that alpha barely changed, that stop is left out of the default (ask for it with `--stop both`). `ssvep-run` takes the same `--stop` switch, and a clench there blocks choosing under the same rules as closing the eyes.
+
+On the simulator (no board): `--sim` with `clench-calibrate` and `signal` uses our own simulator and saves to `backend\brain\test_out\brain_clench_sim.json`, so it never overwrites your real calibration. `run --sim --sim-script "6:clench,8:release,12:blink,14:talk,19:quiet,22:turn"` scripts clenches, talking, blinks, head turns and `closed`/`open` eyes, in seconds from the start.
 
 # Choosing an item by looking at it
 
@@ -77,7 +113,7 @@ Run everything from the project root with `C:\Users\sudar\.conda\envs\lerobot\py
 
 1. Close cloud.pieeg.com and OctoBridge tabs. The puck takes one Bluetooth connection at a time.
 2. Seat the puck at Oz as above. Power it from the power bank.
-3. Signal check: run the eyes-closed calibration from the section above with `--quick`. Its seat check says how many of the 16 pins have good contact; aim for 10 or more. If closing your eyes does not raise alpha, reseat before going on.
+3. Signal check: `python -m backend.brain signal --board` (20 s). Aim for 10 or more good pins. Then calibrate the stop: `python -m backend.brain clench-calibrate --board` (see "Jaw-clench stop" above). The eyes-closed stop is optional; if you use it, run its calibration with `--quick` and reseat if closing your eyes does not raise alpha.
 4. Calibrate the chooser (about 90 seconds):
 
        python -m backend.brain ssvep-calibrate --board
@@ -87,7 +123,9 @@ Run everything from the project root with `C:\Users\sudar\.conda\envs\lerobot\py
 
        python -m backend.brain ssvep-run --board
 
-   Press Start, look at a tile and keep looking. The bar under it fills; at full it says "chosen: sharpie" and sends the request. Look away for a couple of seconds before choosing the same item again. Close your eyes any time to stop the arm. Add `--dry` to print the choice and send nothing. Ctrl+C ends it.
+   Press Start, look at a tile and keep looking. The bar under it fills; at full it says "chosen: sharpie" and sends the request. Look away for a couple of seconds before choosing the same item again. Clench your jaw (or close your eyes, if that stop is on) any time to stop the arm. Add `--dry` to print the choice and send nothing. Ctrl+C ends it.
+
+If calibration shows weak responses for most tiles, use "Choosing by clenching" below instead.
 
 When it picks wrong or never picks:
 
@@ -114,6 +152,23 @@ The simulator makes 16 pins of brain-like noise with a resting alpha, a five tim
 
 Other switches: `--sim-ssvep-uv 1.5` (weaker response), `--sim-rate 230`, `--items "cup,pen,tape"`, `--sentence "please pass the {item}"`, `--port 8767`, `--log file.jsonl`, `--ssvep-calibration path`.
 
-## If our Bluetooth reader cannot connect
+## Choosing by clenching
+
+Use this when the flicker calibration shows weak responses (on the owner, every tile read under 20%). Nothing flickers. The page lights its tiles one at a time, 1.5 s each. When the one you want is lit, clench your jaw briefly, about half a second. The page shows "chosen: sharpie" and the request goes to the agent server exactly as the flicker chooser sends it. To stop the arm, clench and hold for about 1.2 s; that stop always wins and also cancels a choice it interrupts. After a choice, and after a stop clears, scanning rests for 4 s and starts again from the first tile.
+
+Like the clench stop, this reads a muscle signal picked up by the headset, not a brain signal.
+
+1. Seat the puck and calibrate the clench as in "Jaw-clench stop" above. Nothing else is needed; it uses `setup\brain_clench.json`.
+2. Run:
+
+       python -m backend.brain scan-run --board
+
+   Press Start on the page. Esc pauses. Add `--dry` to print the choice and send nothing.
+
+Timing: a clench that starts within 0.3 s after the highlight moved on still counts for the tile that was lit before, since you were reacting to that one. A burst shorter than 0.4 s is ignored. Switches: `--dwell 2` (seconds per tile; give yourself more time if you miss tiles), `--pause 4`, `--long 1.1` (how long a burst must read on the detector to be the stop), `--items`, `--sentence`, `--port`, `--log`.
+
+On the simulator: `python -m backend.brain scan-run --sim --dry`, then on the page press S for a short clench, L for a long one and B for a blink. Without a browser: `scan-run --sim --dry --auto --no-browser --sim-script "3.5:clench,4.0:release,10:blink,17:clench,19.5:release"` (seconds after Start). That one needs a simulator clench calibration first: `clench-calibrate --sim --quick`.
+
+# If our Bluetooth reader cannot connect
 
 The PiEEG dashboard (cloud.pieeg.com) has a Local Bridge desktop app that relays the stream over UDP, and an OSC stream out. We do not use them. They are the fallback if the direct reader cannot hold the puck; feeding either into an LSL stream named Octopus16 would let everything here run unchanged.

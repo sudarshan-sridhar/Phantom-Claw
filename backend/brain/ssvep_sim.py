@@ -7,6 +7,13 @@ at a tile, a small steady response at that tile's rate and its second harmonic. 
 is a couple of microvolts, well under the background, which is about what a real flicker
 response looks like on dry pins.
 
+It can also make the muscle and movement artefacts the clench stop has to sort out: a jaw
+clench (a broadband 20 Hz and up burst on every pin), talking (the same kind of burst,
+weaker and broken into syllables), a hard blink (a slow bump with a trace of muscle), and a
+head turn (a slow swing, two electrode pops and a little neck muscle). These come from
+their own random generator, so the brain-like part is the same as before for any seed.
+The sizes are guesses for a dry puck at the back of the head, not measurements.
+
 SimSignal makes samples (used directly by the tests). SimSource publishes them as an LSL
 stream so the reader, the chooser and the stop run exactly as they do with the board.
 """
@@ -26,7 +33,8 @@ _PINK_A = np.array([1.0, -2.494956002, 2.017265875, -0.522189400])
 class SimSignal:
     def __init__(self, fs: float = 250.0, n_ch: int = 16, ssvep_uv: float = 2.0, background_uv: float = 8.0,
                  pin_noise_uv: float = 3.0, alpha_open_uv: float = 4.0, alpha_closed_uv: float = 22.0,
-                 mains_uv: float = 3.0, seed: int = 0):
+                 mains_uv: float = 3.0, seed: int = 0, clench_uv: float = 30.0, talk_uv: float = 8.0,
+                 blink_uv: float = 60.0, turn_uv: float = 80.0):
         self.fs, self.n_ch = fs, n_ch
         self.ssvep_uv, self.background_uv, self.pin_noise_uv = ssvep_uv, background_uv, pin_noise_uv
         self.alpha_open_uv, self.alpha_closed_uv, self.mains_uv = alpha_open_uv, alpha_closed_uv, mains_uv
@@ -48,6 +56,106 @@ class SimSignal:
         self._ssvep_level = 0.0
         self._alpha_level = alpha_open_uv
         self._calibrate_scales()
+        self._init_muscle(seed, clench_uv, talk_uv, blink_uv, turn_uv)
+
+    # ------------------------------------------------------------ muscle and movement
+
+    def _init_muscle(self, seed, clench_uv, talk_uv, blink_uv, turn_uv) -> None:
+        self.clench_uv, self.talk_uv, self.blink_uv, self.turn_uv = clench_uv, talk_uv, blink_uv, turn_uv
+        self.mrng = np.random.default_rng(seed + 7919)
+        n_ch, fs = self.n_ch, self.fs
+        self.emg_gain = 1.0 + 0.2 * self.mrng.standard_normal(n_ch)
+        self.blink_gain = 1.0 + 0.3 * self.mrng.standard_normal(n_ch)
+        self._emg_sos = signal.butter(4, [20.0, min(150.0, 0.45 * fs)], btype="bandpass", fs=fs, output="sos")
+        self._emg_zi = np.zeros((self._emg_sos.shape[0], 2, n_ch))
+        w = self.mrng.standard_normal(int(fs * 10))
+        e = signal.sosfilt(self._emg_sos, w)
+        self._emg_scale = 1.0 / np.std(e[int(fs):])
+        self.clenching = False
+        self.talking = False
+        self._muscle_level = 0.0
+        self._talk_on = False
+        self._talk_switch = 0
+        self._pending: list[tuple[int, str, object]] = []   # (sample, kind, value)
+        self._shots: list[tuple[int, str, np.ndarray]] = []  # (start sample, kind, pins)
+        self._lock = threading.Lock()
+
+    def schedule(self, kind: str, value=None, delay_s: float = 0.0) -> None:
+        """kind "clench" or "talk" with value True/False, or a one-shot "blink" or "turn",
+        delay_s after the newest sample made so far (a person reacts a little late)."""
+        if kind not in ("clench", "talk", "blink", "turn", "eyes"):
+            raise ValueError(f"unknown sim action {kind!r}")
+        at = self.n + int(round(delay_s * self.fs))
+        with self._lock:
+            self._pending.append((at, kind, value))
+            self._pending.sort(key=lambda e: e[0])
+
+    def _apply(self, kind, value, at) -> None:
+        if kind == "clench":
+            self.clenching = bool(value)
+        elif kind == "talk":
+            self.talking = bool(value)
+        elif kind == "eyes":
+            self.eyes_closed = bool(value)
+        else:
+            pins = self.mrng.choice(self.n_ch, size=2, replace=False)
+            self._shots.append((at, kind, pins))
+
+    def _muscle(self, n: int) -> np.ndarray:
+        """Muscle and movement artefacts for the next n samples (the brain part's sample
+        counter has not moved yet)."""
+        fs, n_ch = self.fs, self.n_ch
+        start = self.n
+        w = (0.7 * self.mrng.standard_normal(n)[:, None] + 0.5 * self.mrng.standard_normal((n, n_ch)))
+        emg, self._emg_zi = signal.sosfilt(self._emg_sos, w, axis=0, zi=self._emg_zi)
+        emg = emg * self._emg_scale / np.sqrt(0.7**2 + 0.5**2) * self.emg_gain[None, :]
+        k = 1.0 - np.exp(-1.0 / (0.03 * fs))   # muscles switch on and off in about 30 ms
+        lvl = np.empty(n)
+        with self._lock:
+            pending = self._pending
+            for i in range(n):
+                idx = start + i
+                while pending and pending[0][0] <= idx:
+                    at, kind, value = pending.pop(0)
+                    self._apply(kind, value, at)
+                if self.talking and idx >= self._talk_switch:
+                    self._talk_on = not self._talk_on
+                    self._talk_switch = idx + int(self.mrng.uniform(0.08, 0.3) * fs)
+                if self.clenching:
+                    target = self.clench_uv
+                elif self.talking and self._talk_on:
+                    target = self.talk_uv
+                else:
+                    target = 0.0
+                self._muscle_level += k * (target - self._muscle_level)
+                lvl[i] = self._muscle_level
+        x = lvl[:, None] * emg
+        if self.talking:   # the jaw moving drags the puck a little, 2 to 4 Hz
+            t = (start + np.arange(n)) / fs
+            x += 2.0 * np.sin(2 * np.pi * 3.0 * t)[:, None]
+        keep = []
+        for at, kind, pins in self._shots:
+            tau = (start + np.arange(n) - at) / fs
+            if kind == "blink":
+                dur = 0.5
+                bump = self.blink_uv * np.exp(-0.5 * ((tau - 0.15) / 0.06) ** 2)
+                bump[tau < 0] = 0.0
+                x += bump[:, None] * self.blink_gain[None, :]
+                squeeze = ((tau >= 0.05) & (tau < 0.2)) * 3.0   # the eyelid muscle, faint at the back
+                x += squeeze[:, None] * emg
+            else:   # head turn
+                dur = 1.2
+                inside = (tau >= 0) & (tau < dur)
+                x += (self.turn_uv * np.sin(np.pi * np.clip(tau, 0, dur) / dur) * inside)[:, None] * self.gain[None, :]
+                for p, tp in zip(pins, (0.3, 0.7)):
+                    step = np.where(tau >= tp, 40.0 * np.exp(-(tau - tp) / 0.25), 0.0)
+                    x[:, p] += step
+                neck = ((tau >= 0.2) & (tau < 0.8)) * 0.6 * self.talk_uv
+                x += neck[:, None] * emg
+            if tau[-1] < dur + 0.5:
+                keep.append((at, kind, pins))
+        self._shots = keep
+        return x
 
     def _calibrate_scales(self) -> None:
         # scale the filtered noises once so their RMS matches the requested microvolts
@@ -60,6 +168,7 @@ class SimSignal:
     def next(self, n: int) -> np.ndarray:
         """The next n samples, shaped (n, n_ch), in microvolts."""
         fs = self.fs
+        muscle = self._muscle(n)
         t = (self.n + np.arange(n)) / fs
         self.n += n
 
@@ -96,7 +205,8 @@ class SimSignal:
              + (ssvep_lvl * resp)[:, None] * self.ssvep_gain[None, :]
              + self.mains_uv * np.sin(2 * np.pi * 60.0 * t)[:, None]
              + self.pin_noise_uv * self.rng.standard_normal((n, self.n_ch))
-             + self.dc[None, :])
+             + self.dc[None, :]
+             + muscle)
         return x
 
     def take(self, seconds: float) -> np.ndarray:
@@ -127,6 +237,10 @@ class SimSource:
             self.sig.gaze_hz = float(gaze_hz)
         if eyes_closed is not None:
             self.sig.eyes_closed = bool(eyes_closed)
+
+    def act(self, kind: str, value=None, delay_s: float = 0.0) -> None:
+        """Simulator actions: clench/talk on or off, a blink, a head turn, eyes open or closed."""
+        self.sig.schedule(kind, value, delay_s)
 
     def poll(self):
         return None if self._thread.is_alive() or not self._stop.is_set() else 0

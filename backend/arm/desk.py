@@ -31,9 +31,25 @@ ROLL_RANGE = (1110, 2950)  # inside what the camera cable allows (1100 to 2960)
 # base 35 ticks lower moved the pen about 50 px right in the picture at 29.5 cm reach (1.4 px per
 # tick); the gain grows with reach (the camera swings further per tick), so it is scaled by
 # dist_cm / pan_gain_ref_cm when pan_gain_scales is on.
+#
+# Reach, for compact items only (a case, a cap: the reader gives "compact" and where it sits). A
+# long item lying along the reach crosses the jaw row wherever the hover is, so the distance does
+# not matter for it; a compact one has to sit just above the jaw row or the jaws close on air (the
+# earbuds case miss on 2026-11-15: cut off at the bottom edge between the jaw tips). So the hover
+# moves along the taught blend, using the tier poses for dist_cm + d:
+#   d_cm = -(centre_y - reach_target_y) * reach_cm_per_px    (lower in the picture: nearer the arm)
+# and an item cut off by the bottom edge moves back toward the base by max_reach_step_cm. The
+# target row (y 235 of 360, just above the jaw row at 290) is a first guess. The gain comes from the
+# jaw gap: about 220 px for roughly 5 cm at hover height, so about 0.035 cm per px (also a guess).
+# Each round corrects one thing: the roll, else the pan, else the reach.
+#
+# Jaw opening: an item wider than wide_ratio of the jaw gap at the present opening (the gap model
+# is in backend/vision/wrist_aim.py AIM: 220 px at 1750 ticks, growing 0.5 px per tick) makes the
+# jaws open to ref + (width_px - ref_gap) / px_per_tick + open_margin_ticks before going down,
+# never above open_max (the calibrated range is 1305 to 2788).
 WRIST_AIM = {
     "tiers": ("low",),           # tiers that aim with the wrist camera by default (PHANTOM_WRIST_AIM=all|low|off)
-    "rounds": 3,                 # at most this many looks
+    "rounds": 4,                 # at most this many looks
     "angle_tol_deg": 6.0,        # within this, the roll is left alone
     "offset_tol_px": 25.0,       # within this (640 wide picture), the pan is left alone
     "roll_ticks_per_deg": 4096 / 360.0,   # 11.38
@@ -48,15 +64,26 @@ WRIST_AIM = {
     "roll_speed": 900,           # ticks per second for the correction moves (pace stretches them a little)
     "pan_speed": 150,
     "min_move_s": 0.4,
+    "reach_target_y": 235.0,     # a compact item's centre row should sit here (first guess)
+    "reach_cm_per_px": 0.035,    # cm of reach per px of that row (first guess, from the jaw gap)
+    "reach_tol_px": 30.0,        # within this, the reach is left alone
+    "max_reach_step_cm": 3.0,    # cm in one correction, never more; also the step back when cut off
+    "reach_speed_cm_s": 4.0,     # for the reach correction move
+    "wide_ratio": 0.6,           # wider than this share of the jaw gap: open wider before going down
+    "open_margin_ticks": 120,    # extra opening on top of the item's width (about 60 px)
+    "open_max": 2600,            # never open further than this
 }
 
 
-def aim_step(reading, roll_now, pan_now, dist_cm=None, cfg=WRIST_AIM, roll_range=ROLL_RANGE, pan_range=None):
+def aim_step(reading, roll_now, pan_now, dist_cm=None, cfg=WRIST_AIM, roll_range=ROLL_RANGE, pan_range=None,
+             reach_range=None):
     """What one wrist reading asks for. The roll is corrected first and alone, since turning the
     wrist turns the picture: the pan is only corrected once the angle is within tolerance (or the
-    item is round). Returns {"done", "roll", "pan", "d_roll", "d_pan", "capped", "why"}; roll and
-    pan are the new goals, or None when that joint stays."""
-    out = {"done": False, "roll": None, "pan": None, "d_roll": 0, "d_pan": 0, "capped": False, "why": ""}
+    item is round), and the reach (compact items only) once both are. Returns {"done", "roll",
+    "pan", "reach", "d_roll", "d_pan", "d_reach", "capped", "why"}; roll and pan are the new
+    goals and reach the new distance in cm, or None when that stays."""
+    out = {"done": False, "roll": None, "pan": None, "reach": None, "d_roll": 0, "d_pan": 0, "d_reach": 0.0,
+           "capped": False, "why": ""}
     ang, off = reading.get("angle_deg"), reading.get("offset_px")
     angle_off = ang is not None and abs(ang) > cfg["angle_tol_deg"]
     offset_off = off is not None and abs(off) > cfg["offset_tol_px"]
@@ -83,11 +110,62 @@ def aim_step(reading, roll_now, pan_now, dist_cm=None, cfg=WRIST_AIM, roll_range
         side = "left" if off < 0 else "right"
         out.update(pan=new, d_pan=new - int(pan_now), why=f"{abs(off):.0f} px {side} of the jaw centre")
         return out
+    out["capped"] = False
+    reach = reach_want(reading, cfg)
+    if reach is not None and dist_cm is not None:
+        want, why = reach
+        step = max(-cfg["max_reach_step_cm"], min(cfg["max_reach_step_cm"], want))
+        out["capped"] = abs(step) < abs(want) - 0.05
+        new = dist_cm + step
+        if reach_range is not None:
+            new = max(reach_range[0], min(reach_range[1], new))
+        if abs(new - dist_cm) >= 0.1:
+            out.update(reach=round(new, 2), d_reach=round(new - dist_cm, 2), why=why)
+            return out
+        out["capped"] = False           # at the end of the taught reach: carry on as it is
     out["done"] = True
     bits = ([f"within {abs(ang):.0f} deg"] if ang is not None else ["round"]) + \
-           ([f"{abs(off):.0f} px"] if off is not None else [])
+           ([f"{abs(off):.0f} px"] if off is not None else []) + \
+           ([f"row {reading['centre_y']:.0f}"] if reading.get("compact") and reading.get("centre_y") is not None else [])
     out["why"] = "lined up (" + ", ".join(bits) + ")"
     return out
+
+
+def reach_want(reading, cfg=WRIST_AIM):
+    """(cm to move the hover out, why) for a compact item that does not sit at the target row, or
+    None. Negative: back toward the base."""
+    if not reading.get("compact") or reading.get("centre_y") is None:
+        return None
+    if reading.get("touches_bottom"):
+        return -cfg["max_reach_step_cm"], "cut off by the bottom edge: too near, moving back"
+    dy = reading["centre_y"] - cfg["reach_target_y"]
+    if abs(dy) <= cfg["reach_tol_px"]:
+        return None
+    where = "too near, moving back" if dy > 0 else "too far, moving out"
+    return -dy * cfg["reach_cm_per_px"], f"centre row {reading['centre_y']:.0f}, {abs(dy):.0f} px off: {where}"
+
+
+def jaw_opening(width_px, open_now, cfg=WRIST_AIM):
+    """Gripper ticks to open to before going down for an item width_px wide, or None when the
+    present opening will do (the item is at most wide_ratio of the jaw gap)."""
+    from backend.vision.wrist_aim import AIM, jaw_gap
+    if not width_px or open_now is None:
+        return None
+    if width_px <= cfg["wide_ratio"] * jaw_gap(open_now):
+        return None
+    ref = AIM["jaw_open_ref"]
+    want = ref + (width_px - jaw_gap(ref)) / AIM["jaw_px_per_tick"] + cfg["open_margin_ticks"]
+    want = int(round(min(cfg["open_max"], want)))
+    return want if want > open_now + 5 else None
+
+
+def is_compact(name, rounds=()):
+    """True for an item that is not long and thin: named so (an earbuds case, a cap), or read as
+    compact by the wrist camera on any look."""
+    from backend.vision.wrist_aim import shape_for
+    if shape_for(name) == "round":
+        return True
+    return any(r.get("compact") for r in rounds or ())
 
 
 def aim_tiers(setting=None):
@@ -116,6 +194,9 @@ def aim_words(rounds):
         if r.get("unread"):
             parts.append(f"look {r['round']}: could not read the wrist picture")
             continue
+        if r.get("opened"):
+            parts.append(f"jaws opened to {r['opened']} for a {r['width_px']:.0f} px wide item")
+            continue
         src = r.get("source") or "?"
         if r.get("done"):
             parts.append(f"look {r['round']} ({src}): {r['why']}")
@@ -123,6 +204,9 @@ def aim_words(rounds):
             parts.append(f"look {r['round']} ({src}): {r['why']}, wrist roll {r['d_roll']:+d}" + (" (capped)" if r.get("capped") else ""))
         elif r.get("d_pan"):
             parts.append(f"look {r['round']} ({src}): {r['why']}, pan {r['d_pan']:+d}" + (" (capped)" if r.get("capped") else ""))
+        elif r.get("d_reach"):
+            parts.append(f"look {r['round']} ({src}): {r['why']}, reach {r['d_reach']:+.1f} cm"
+                         + (" (capped)" if r.get("capped") else ""))
         else:
             parts.append(f"look {r['round']} ({src}): {r['why']}")
     return "wrist aim: " + "; ".join(parts)
@@ -199,7 +283,12 @@ def pick_plan(item, tiers, pan_range):
         raise Refuse("out_of_reach", problem)
     via, grasp, t = tier.posture(at["dist_cm"])
     roll = None
-    if tier_name == "low" and item.get("axis_deg") is not None:
+    if tier_name == "low" and is_compact(name):
+        # a round or compact item has no long side for the overhead angle to mean anything (the
+        # earbuds case got roll 1450 from a -30 deg "angle" and missed): start at the taught roll
+        rolls = [s["roll"] for s in tier.spots if s.get("roll") is not None]
+        roll = int(round(sum(rolls) / len(rolls))) if rolls else None
+    elif tier_name == "low" and item.get("axis_deg") is not None:
         roll = jaw_roll(item["axis_deg"], at["bearing"], zero=tier.roll_zero(ROLL_SIGN, ROLL_ZERO))
     return {"tier": tier, "via": via, "grasp": grasp, "t": t, "pan": int(at["pan"]), "roll": roll,
             "dist_cm": at["dist_cm"]}

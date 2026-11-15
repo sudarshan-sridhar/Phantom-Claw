@@ -10,6 +10,10 @@ Endpoints (all JSON, local only):
   POST /api/display      {"refresh": 59.94}   the page reports the measured refresh rate
   POST /api/flicker      {"on": true|false}   Start pressed, or Esc / tab hidden
   POST /api/sim          {"gaze": index|null, "eyes_closed": bool}   simulator only
+                         {"act": "short"|"long"|"blink"}   simulator, scan mode: a clench or blink
+
+Mode "scan" (scan-run) shows the same tiles with no flicker at all: one tile at a time is lit
+("lit" in the state) and a short jaw clench chooses it. Start and Esc work the same way.
 """
 from __future__ import annotations
 
@@ -26,7 +30,7 @@ class ChooserState:
     def __init__(self, items: list[str], mode: str, sim=None):
         self.lock = threading.Lock()
         self.items = list(items)
-        self.mode = mode                 # "calibrate" or "run"
+        self.mode = mode                 # "calibrate", "run" or "scan"
         self.sim = sim                   # SimSource or None
         self.refresh: float | None = None
         self.frames: list[int] | None = None   # frames per cycle for each tile
@@ -41,6 +45,8 @@ class ChooserState:
         self.warning = ""
         self.gaze = None                 # simulator: which tile is being looked at
         self.eyes_closed = False         # simulator
+        self.lit = None                  # scan mode: the tile lit now
+        self.dwell_s = 1.5               # scan mode: how long each tile stays lit
         self.display_event = threading.Event()
 
     def snapshot(self) -> dict:
@@ -52,6 +58,7 @@ class ChooserState:
                 "progress": self.progress, "chosen": self.chosen, "stopped": self.stopped,
                 "status": self.status, "warning": self.warning, "sim": self.sim is not None,
                 "gaze": self.gaze, "eyes_closed": self.eyes_closed, "now": time.time(),
+                "lit": self.lit, "dwell_s": self.dwell_s,
             }
 
     def set(self, **kw) -> None:
@@ -124,6 +131,14 @@ def _handler(state: ChooserState):
             if path == "/api/sim":
                 if state.sim is None:
                     return self._json({"error": "not in simulator mode"}, 400)
+                act = body.get("act")
+                if act in ("short", "long"):
+                    state.sim.act("clench", True)
+                    state.sim.act("clench", False, delay_s=0.5 if act == "short" else 2.0)
+                    return self._json({"ok": True})
+                if act == "blink":
+                    state.sim.act("blink")
+                    return self._json({"ok": True})
                 g = body.get("gaze")
                 state.set_gaze(int(g) if isinstance(g, (int, float)) else None, body.get("eyes_closed"))
                 return self._json({"ok": True})

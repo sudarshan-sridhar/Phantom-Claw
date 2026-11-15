@@ -530,6 +530,7 @@ class FakeArm:
         if aim:
             note += ". " + desk.aim_words(aim)
         aim_extra = {"aim": aim} if aim else {}
+        # plan["grasp"] is the one the aim left (moved in or out for a compact item)
         self._move({i: plan["grasp"][n] for i, n in ((2, "lift"), (3, "elbow"), (4, "wrist_flex"))}, S.FETCH_APPROACH_S * k)
         self._emit("at_target")
         self._wait(S.FETCH_CLOSE_S)
@@ -543,6 +544,9 @@ class FakeArm:
             self._emit("done")
             return "missed", f"the gripper closed on nothing. {note}", aim_extra
         grip = tier.closed or 1478
+        opened = next((r["opened"] for r in aim if r.get("opened")), None)
+        if opened:
+            grip = opened - 300        # a wide item stops the jaws far out
         self._joints[6] = grip
         self._holding = True
         self._emit("gripped")
@@ -578,6 +582,7 @@ class FakeArm:
         W = desk.WRIST_AIM
         stretch = 1.0 + 0.25 * (k - 1.0)
         rounds = []
+        tier, width = plan["tier"], None
         for n in range(1, W["rounds"] + 1):
             self._wait(W["settle_s"] + 0.1)                   # settle, then the picture and OpenCV
             reading = self._wrist_read(n, plan)
@@ -586,10 +591,16 @@ class FakeArm:
                 self._emit(f"aiming {n}: could not read the wrist picture; keeping the aim it has")
                 break
             roll_now, pan_now = self._joints.get(5, 2030), self._joints[1]
-            step = desk.aim_step(reading, roll_now, pan_now, plan["dist_cm"], pan_range=self.PAN_RANGE)
+            step = desk.aim_step(reading, roll_now, pan_now, plan["dist_cm"], pan_range=self.PAN_RANGE,
+                                 reach_range=(tier.min_r, tier.max_r))
             rec = {"round": n, "source": reading.get("source"), "angle_deg": reading.get("angle_deg"),
                    "offset_px": reading.get("offset_px"), "confidence": reading.get("confidence"),
                    **{key: step[key] for key in ("done", "d_roll", "d_pan", "capped", "why")}}
+            if reading.get("compact"):
+                rec.update({key: reading.get(key) for key in ("compact", "centre_y", "width_px", "touches_bottom")},
+                           d_reach=step["d_reach"])
+            if reading.get("compact") and reading.get("width_px"):     # long items open as before
+                width = reading["width_px"]
             rounds.append(rec)
             if step["done"]:
                 self._emit(f"aiming {n}: {step['why']}")
@@ -602,10 +613,23 @@ class FakeArm:
                 self._emit(f"aiming {n}: {step['why']}, pan {step['d_pan']:+d} to {step['pan']}"
                            + (" (capped)" if step["capped"] else ""))
                 self._move({1: step["pan"]}, max(W["min_move_s"], abs(step["d_pan"]) / W["pan_speed"]) * stretch)
+            elif step["reach"] is not None:
+                via, grasp, t = tier.posture(step["reach"])
+                plan.update(dist_cm=step["reach"], via=via, grasp=grasp, t=t)
+                self._emit(f"aiming {n}: {step['why']}, reach {step['d_reach']:+.1f} cm to {step['reach']:.1f}"
+                           + (" (capped)" if step["capped"] else ""))
+                self._move({i: via[nm] for i, nm in ((2, "lift"), (3, "elbow"), (4, "wrist_flex"))},
+                           max(W["min_move_s"], abs(step["d_reach"]) / W["reach_speed_cm_s"]) * stretch)
             else:
                 rec["why"] += "; cannot turn further"
                 self._emit(f"aiming {n}: {rec['why']}")
                 break
+        new_open = desk.jaw_opening(width, self._joints.get(6))
+        if new_open is not None:
+            rounds.append({"round": len(rounds) + 1, "opened": new_open, "width_px": width, "done": True,
+                           "why": f"{width:.0f} px wide: opening the jaws to {new_open}"})
+            self._emit(f"aiming: {width:.0f} px wide, opening the jaws from {self._joints.get(6)} to {new_open}")
+            self._move({6: new_open}, W["min_move_s"])
         return rounds
 
     def _skill_place(self, where, pace, approach):

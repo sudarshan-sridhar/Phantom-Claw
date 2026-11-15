@@ -50,6 +50,7 @@ class SimBus:
         self.last = clock.time()
         self.writes = []          # (t, id, address, value)
         self.grip_ok = grip_ok
+        self.cap = CAP            # where the jaws stop on the item (a wide item stops them further out)
         self.holding = False
         self.events = []
         self.current = 60         # raw current reading (x 6.5 mA)
@@ -94,9 +95,9 @@ class SimBus:
                         new, sv.vel = max(lo, min(hi, new)), 0.0
                 if i == 6:
                     # the cap is only between the jaws when the arm is out at the bottle and they close onto it
-                    if self.grip_ok and sv.pos >= CAP and new < CAP and self.s[2].pos > 1400:
-                        new, sv.vel, self.holding = CAP, 0.0, True
-                    if self.holding and new > CAP + 150:        # jaws open: the bottle is out of them
+                    if self.grip_ok and sv.pos >= self.cap and new < self.cap and self.s[2].pos > 1400:
+                        new, sv.vel, self.holding = self.cap, 0.0, True
+                    if self.holding and new > self.cap + 150:        # jaws open: the bottle is out of them
                         self.holding, self.grip_ok = False, False
                         for s2 in self.s.values():
                             s2.ext = 0.0
@@ -236,10 +237,12 @@ class FakeVision:
     aim_readings = None
     aim_delay = 0.0          # real seconds each look takes (a stop can come in meanwhile)
 
-    def wrist_aim(self, name=None, shape="auto", save_to=None, use_gemini=True):
+    def wrist_aim(self, name=None, shape="auto", save_to=None, use_gemini=True, opening=None):
         import time
         if not hasattr(self, "aim_looks"):
             self.aim_looks = []
+            self.aim_openings = []
+        self.aim_openings.append(opening)
         roll, pan = (self.bus.pos(5), self.bus.pos(1)) if self.bus is not None else (None, None)
         n = len(self.aim_looks) + 1
         self.aim_looks.append((n, roll, pan, name, str(save_to) if save_to else None))

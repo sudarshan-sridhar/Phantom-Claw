@@ -39,6 +39,30 @@ def outcome(skill: str, phases: list[str]) -> str:
     return "stopped"
 
 
+# a plan step's result in the words the charts use
+STEP_WORDS = {"missed": "missed", "handed_over": "handed over", "stopped": "stopped", "error": "error",
+              "not_found": "refused", "out_of_reach": "refused", "not_taught": "refused",
+              "not_graspable": "refused", "no_picture": "refused"}
+
+
+def plan_outcome(steps: list[dict], result: str | None = None) -> str:
+    """How a desk plan ended: stopped wins, then the last step that did something. A put-back
+    after a failure (recovery: true) counts as put back when it worked; a rest after a failed
+    put-back says the put-back failed."""
+    if result == "stopped" or any(s.get("result") == "stopped" for s in steps):
+        return "stopped"
+    real = [s for s in steps if not (s.get("recovery") and s.get("skill") == "rest")]
+    if not real:
+        return "stopped" if result is None else STEP_WORDS.get(result, "error")
+    last = real[-1]
+    if last.get("recovery") and last.get("skill") == "place":
+        return "put back" if last.get("ok") else "error"
+    r = last.get("result") or ""
+    if r in STEP_WORDS:
+        return STEP_WORDS[r]
+    return "done" if last.get("ok") else "error"
+
+
 class RequestTracker:
     """Follows one job at a time from its request event to the end of its arm run."""
 
@@ -49,14 +73,18 @@ class RequestTracker:
     def _start(self, ev: dict, t: float) -> None:
         self.cur = {"time": t, "text": ev.get("text"), "agent": ev.get("named_agent"), "provider": None,
                     "reply_ms": None, "arm_skill": None, "arm_t0": None, "arm_ms": None, "phases": [],
-                    "said": False, "arm_done": False}
+                    "said": False, "arm_done": False, "plan": False, "plan_steps": [], "plan_result": None}
 
     def finish(self) -> None:
         c, self.cur = self.cur, None
         if c is None:
             return
         result = None
-        if c["arm_skill"]:
+        if c["plan"]:
+            result = c["plan_result"] or plan_outcome(c["plan_steps"])
+            if c["arm_ms"] is None and c["arm_t0"] is not None:
+                c["arm_ms"] = int((time.time() - c["arm_t0"]) * 1000)
+        elif c["arm_skill"]:
             result = outcome(c["arm_skill"], c["phases"])
             if c["arm_ms"] is None and c["arm_t0"] is not None:
                 c["arm_ms"] = int((time.time() - c["arm_t0"]) * 1000)
@@ -78,6 +106,19 @@ class RequestTracker:
         elif kind == "say" and not c["said"]:
             c["said"] = True
             c["agent"] = c["agent"] or ev.get("agent")
+        elif kind == "arm_plan" and ev.get("agent") == c["agent"]:
+            # a desk plan is one arm job from its start to its done, whatever steps it ran
+            if ev.get("phase") == "start" and not c["plan"]:
+                c.update(plan=True, arm_skill="plan", arm_t0=t, arm_ms=None, arm_done=False, phases=[])
+            elif ev.get("phase") == "done" and c["plan"] and not c["arm_done"]:
+                steps = ev.get("steps") if isinstance(ev.get("steps"), list) else c["plan_steps"]
+                c["plan_result"] = plan_outcome(steps, ev.get("result"))
+                c["arm_ms"] = int((t - c["arm_t0"]) * 1000)
+                c["arm_done"] = True
+        elif kind == "arm_step" and c["plan"] and ev.get("agent") == c["agent"]:
+            c["plan_steps"].append(ev)
+        elif kind == "arm" and c["plan"] and ev.get("agent") == c["agent"]:
+            c["phases"].append(ev.get("phase") or "")      # inside a plan: the plan's own events time it
         elif kind == "arm" and ev.get("skill") and ev["skill"] not in NOT_A_JOB and ev.get("agent") == c["agent"]:
             phase = ev.get("phase") or ""
             if c["arm_skill"] is None:

@@ -1063,7 +1063,9 @@ class RealArm:
             self._wait(S.FETCH_LOOK_FIRST_S)
         aim = []
         if tier.name in desk.aim_tiers(self.aim_setting):
-            aim = self._aim_with_wrist(name, plan["dist_cm"], k)
+            aim = self._aim_with_wrist(name, plan, k)
+            via, grasp = plan["via"], plan["grasp"]      # moved in or out for a compact item
+        opened = next((r["opened"] for r in aim if r.get("opened")), None)
         rolled = roll is not None or any(r.get("d_roll") for r in aim)
         if aim:
             note += ". " + desk.aim_words(aim)
@@ -1071,7 +1073,10 @@ class RealArm:
         self._fblend(self._three(grasp, S.FETCH_APPROACH_S * k))
         self._emit("at_target")
         self._held_tier = tier
-        miss_below = None if tier.closed is None else max(CLOSED + 15, tier.closed - 50)
+        # the thin item rule (jaws stopping near the taught pen grip count as empty) is only for long
+        # thin items; a compact or wide one stops the jaws far out, and only nearly fully closed is a miss
+        thin = not opened and not desk.is_compact(name, aim)
+        miss_below = None if tier.closed is None or not thin else max(CLOSED + 15, tier.closed - 50)
         grip = self._close_gripper(speed=FETCH_CLOSE_SPEED, give_up_s=5.0, miss_below=miss_below)
         if grip is None:
             self._forget_held()
@@ -1098,14 +1103,18 @@ class RealArm:
         self._emit("done")
         return "holding", f"holding the {name}, gripped at {grip}. {note}", {"held": public(item), **aim_extra}
 
-    def _aim_with_wrist(self, name, dist_cm, k):
+    def _aim_with_wrist(self, name, plan, k):
         """From the hover pose, line the jaws up with the item using the wrist camera: up to
-        WRIST_AIM["rounds"] looks; each one corrects the wrist roll (first) or the pan, waits for the
-        move, and looks again, until the item runs straight up between the jaw tips. A picture
+        WRIST_AIM["rounds"] looks; each one corrects the wrist roll (first), the pan, or for a
+        compact item the reach (the hover moves along the taught blend; plan's dist_cm, via and
+        grasp are updated), waits for the move, and looks again, until the item sits between the
+        jaw tips. Then a wide item makes the jaws open wider (a last entry with "opened"). A picture
         that cannot be read ends the loop and pick carries on with the aim it has. Each look's
         picture is saved as setup/last_wrist_aim_N.jpg (and _N_read.jpg with the reading drawn).
         Returns the rounds, for the result."""
         W = desk.WRIST_AIM
+        tier, dist_cm = plan["tier"], plan["dist_cm"]
+        width = None
         stretch = 1.0 + 0.25 * (k - 1.0)          # pace slows these small moves only a little
         rounds = []
         for old in self.setup_dir.glob("last_wrist_aim_*.jpg"):
@@ -1123,10 +1132,16 @@ class RealArm:
                     self._emit(f"aiming {n}: could not read the wrist picture ({why}); keeping the aim it has")
                     break
                 roll_now, pan_now = self._rd(5, POSITION), self._rd(1, POSITION)
-                step = desk.aim_step(reading, roll_now, pan_now, dist_cm, pan_range=self._pan_range)
+                step = desk.aim_step(reading, roll_now, pan_now, dist_cm, pan_range=self._pan_range,
+                                     reach_range=(tier.min_r, tier.max_r))
                 rec = {"round": n, "source": reading.get("source"), "angle_deg": reading.get("angle_deg"),
                        "offset_px": reading.get("offset_px"), "confidence": reading.get("confidence"),
                        **{key: step[key] for key in ("done", "d_roll", "d_pan", "capped", "why")}}
+                if reading.get("compact"):
+                    rec.update({key: reading.get(key) for key in ("compact", "centre_y", "width_px", "touches_bottom")},
+                               d_reach=step["d_reach"])
+                if reading.get("compact") and reading.get("width_px"):     # long items open as before
+                    width = reading["width_px"]
                 rounds.append(rec)
                 if step["done"]:
                     self._emit(f"aiming {n}: {step['why']}")
@@ -1141,10 +1156,25 @@ class RealArm:
                                + (" (capped)" if step["capped"] else ""))
                     dur = max(W["min_move_s"], abs(step["d_pan"]) / W["pan_speed"]) * stretch
                     self._fblend([(1, step["pan"], 0, dur)], settle=False)
+                elif step["reach"] is not None:
+                    dist_cm = step["reach"]
+                    via, grasp, t = tier.posture(dist_cm)
+                    plan.update(dist_cm=dist_cm, via=via, grasp=grasp, t=t)
+                    self._emit(f"aiming {n}: {step['why']}, reach {step['d_reach']:+.1f} cm to {dist_cm:.1f}"
+                               + (" (capped)" if step["capped"] else ""))
+                    dur = max(W["min_move_s"], abs(step["d_reach"]) / W["reach_speed_cm_s"]) * stretch
+                    self._fblend(self._three(via, dur), settle=False)
                 else:
                     rec["why"] += "; cannot turn further"
                     self._emit(f"aiming {n}: {rec['why']}")
                     break
+            open_now = self._rd(6, POSITION)
+            new_open = desk.jaw_opening(width, open_now)
+            if new_open is not None:
+                rounds.append({"round": len(rounds) + 1, "opened": new_open, "width_px": width, "done": True,
+                               "why": f"{width:.0f} px wide: opening the jaws to {new_open}"})
+                self._emit(f"aiming: {width:.0f} px wide, opening the jaws from {open_now} to {new_open}")
+                self._fblend([(6, new_open, 0, max(W["min_move_s"], (new_open - open_now) / 800.0))], settle=False)
         finally:
             try:
                 self.vision.close_wrist()
@@ -1156,7 +1186,8 @@ class RealArm:
         """(reading, None) or (None, why not)."""
         path = self.setup_dir / f"last_wrist_aim_{n}.jpg"
         try:
-            got = self._call_vision(lambda: self.vision.wrist_aim(name, save_to=path))
+            opening = self._rd(6, POSITION)
+            got = self._call_vision(lambda: self.vision.wrist_aim(name, save_to=path, opening=opening))
         except _Stopped:
             raise
         except Exception as e:
