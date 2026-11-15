@@ -85,7 +85,19 @@ class Pipeline:
         self.models = models
         self.states: dict[str, str] = {cid: "idle" for cid in CAST}
         self._left_out = False   # the last arm result left the arm out of rest (stopped or error)
+        # The last look at the desk, kept a few seconds so one request doesn't look twice.
+        self._scene: dict | None = None
+        try:
+            self.scene_ttl = float(os.environ.get("PHANTOM_SCENE_TTL", "6"))
+        except ValueError:
+            self.scene_ttl = 6.0
+        self._stop_req = False   # set by request_stop(); a desk plan checks it between steps
         warm_claude()
+
+    def request_stop(self) -> None:
+        """The stop button: the arm holds where it is (the server calls arm.stop) and a desk plan
+        runs no further steps."""
+        self._stop_req = True
 
     # ------------------------------------------------------------ helpers
 
@@ -117,18 +129,32 @@ class Pipeline:
         """True when the arm was left out of rest by a stop or an error. The arm's own at_rest
         wins when it reports one; otherwise the last result decides."""
         try:
-            at_rest = self.arm.status().get("at_rest")
+            st = self.arm.status()
         except Exception:  # noqa: BLE001
-            at_rest = None
+            st = {}
+        if st.get("held"):
+            return False      # carrying something it picked up: the arm itself decides what may run
+        at_rest = st.get("at_rest")
         if at_rest is not None:
             return not at_rest
         return self._left_out
 
-    async def _run_skill(self, agent: str, skill: str, params: dict, auto: bool = False) -> dict:
+    def held_name(self) -> str | None:
+        """The item the arm is carrying (status()["held"]), or None."""
+        try:
+            held = self.arm.status().get("held") if self.arm is not None else None
+        except Exception:  # noqa: BLE001
+            return None
+        if isinstance(held, dict):
+            return held.get("name") or "item"
+        return held or None
+
+    async def _run_skill(self, agent: str, skill: str, params: dict, auto: bool = False,
+                         extra: dict | None = None) -> dict:
         loop = asyncio.get_running_loop()
 
         def on_phase(phase: str) -> None:
-            ev = {"type": "arm", "agent": agent, "skill": skill, "phase": phase}
+            ev = {"type": "arm", "agent": agent, "skill": skill, "phase": phase, **(extra or {})}
             if auto:
                 ev["auto"] = True
             loop.call_soon_threadsafe(lambda: asyncio.ensure_future(self.emit(ev)))
@@ -147,7 +173,7 @@ class Pipeline:
             self._left_out = False   # every other skill that finished ends at rest
         return {**res, "skill": skill}
 
-    async def run_arm(self, agent: str, skill: str, params: dict) -> dict:
+    async def run_arm(self, agent: str, skill: str, params: dict, extra: dict | None = None) -> dict:
         """Run one arm skill in a worker thread, sending `arm` events for each phase.
 
         After a stop or an error the arm is left where it stopped. Before the next skill it is
@@ -168,10 +194,162 @@ class Pipeline:
             if skill == "gesture":
                 return {"ok": False, "result": "skipped", "detail": "went back to rest instead of this gesture",
                         "skill": skill, "auto_rest": auto}
-        res = await self._run_skill(agent, skill, params)
+        res = await self._run_skill(agent, skill, params, extra=extra)
         if auto is not None:
             res["auto_rest"] = auto
         return res
+
+    # ------------------------------------------------------------ the desk: looking and plans of steps
+
+    def scene_fresh(self) -> bool:
+        return self._scene is not None and time.monotonic() - self._scene["t"] <= self.scene_ttl
+
+    def forget_scene(self) -> None:
+        self._scene = None
+
+    def _keep_scene(self, res: dict) -> None:
+        if res.get("result") == "done" and isinstance(res.get("scene"), list):
+            self._scene = {"t": time.monotonic(), "res": {"ok": True, "result": "done", "scene": res["scene"],
+                                                         "person": res.get("person"), "detail": res.get("detail", "")}}
+
+    async def look_scene(self, agent: str | None = None, force: bool = False) -> dict:
+        """What the overhead camera sees: {"ok", "result", "scene", "person", "ms", "cached"}.
+
+        result is "done", "no_picture", "not_found" (Gemini failed), "no_arm" (no arm, or one
+        that can't look) or an arm error. A fresh look from the last few seconds is reused."""
+        if not force and self.scene_fresh():
+            return {**self._scene["res"], "ms": 0, "cached": True}
+        if not self.use_arm or self.arm is None:
+            return {"ok": False, "result": "no_arm", "scene": None, "ms": 0, "cached": False}
+        t0 = time.monotonic()
+        while True:
+            try:
+                res = await asyncio.to_thread(self.arm.run, "look", {}, lambda _p: None)
+            except Exception as e:  # noqa: BLE001
+                res = {"ok": False, "result": "error", "detail": f"{type(e).__name__}: {e}"[:200]}
+            if res.get("result") != "busy" or time.monotonic() - t0 > 6:
+                break
+            await asyncio.sleep(0.2)     # a gesture is finishing
+        ms = int((time.monotonic() - t0) * 1000)
+        result = res.get("result")
+        if result == "error" and "unknown" in str(res.get("detail", "")):
+            result = "no_arm"            # an older arm without the look skill: plan without a scene
+        self._keep_scene(res)
+        out = {"ok": result == "done" and isinstance(res.get("scene"), list), "result": result,
+               "scene": res.get("scene"), "person": res.get("person"), "detail": str(res.get("detail", ""))[:200],
+               "ms": ms, "cached": False}
+        items = [{k: it.get(k) for k in ("name", "x_cm", "y_cm", "dist_cm", "tier", "graspable")}
+                 for it in (out["scene"] or [])]
+        await self.emit({"type": "scene", "agent": agent, "result": result, "items": items, "ms": ms})
+        return out
+
+    def _item_dist(self, name: str | None, decision: dict | None) -> float | None:
+        scenes = []
+        if self._scene:
+            scenes.append(self._scene["res"].get("scene") or [])
+        if decision and decision.get("scene"):
+            scenes.append(decision["scene"])
+        for sc in scenes:
+            for it in sc:
+                if it.get("name") == name and it.get("dist_cm") is not None:
+                    return float(it["dist_cm"])
+        return None
+
+    async def run_plan(self, agent: str, steps: list[dict], decision: dict | None = None) -> dict:
+        """Run a desk plan step by step and react to what comes back.
+
+        pick missed: one more try after a fresh look, then give up. not_found, out_of_reach,
+        not_taught, not_graspable, no_picture: stop and say why. hand_over not_taken: put it back.
+        Any other failure while holding: put it back, then rest. stopped: nothing more moves.
+        Returns {"ok", "result", "skill": "plan", "steps", "item", "say"}; say is the line that
+        tells what really happened (may be empty)."""
+        n = len(steps)
+        manner = cast_mod.ARM_MANNER.get(agent, cast_mod.ARM_MANNER["gowther"])
+        await self.emit({"type": "arm_plan", "agent": agent, "phase": "start", "steps": steps})
+        done: list[dict] = []
+        outcome, item, dist = None, None, None
+        retried = False
+
+        async def step(i: int, skill: str, params: dict, **flags) -> dict:
+            info = {"step": i, "steps": n, **flags}
+            if skill == "look" and self.scene_fresh() and not flags.get("retry"):
+                res = {"ok": True, "result": "done", "detail": "used the look from a moment ago", "cached": True}
+            else:
+                res = await self.run_arm(agent, skill, params, extra=info)
+                if skill == "look":
+                    self._keep_scene(res)
+                elif skill in ("pick", "place", "hand_over", "rest"):
+                    self.forget_scene()          # things have moved
+            rec = {"step": i, "skill": skill, "params": params, "result": res.get("result"),
+                   "ok": bool(res.get("ok")), "detail": str(res.get("detail", ""))[:200], **flags}
+            if res.get("cached"):
+                rec["cached"] = True
+            if res.get("auto_rest"):
+                rec["auto_rest"] = True
+            done.append(rec)
+            await self.emit({"type": "arm_step", "agent": agent, **rec})
+            return res
+
+        async def put_back(i: int) -> None:
+            if self._stop_req or not self.held_name():
+                return
+            back = await step(i, "place", {"where": "back", "pace": manner["pace"], "approach": manner["approach"]},
+                              recovery=True)
+            if not back.get("ok") and back.get("result") != "stopped" and self.held_name():
+                await step(i, "rest", {}, recovery=True)
+
+        i = 0
+        while i < n:
+            if self._stop_req:
+                outcome = "stopped"
+                break
+            skill, params = steps[i]["skill"], dict(steps[i]["params"])
+            tgt = params.get("target") if isinstance(params.get("target"), str) else None
+            if skill in ("pick", "point_at") and tgt:
+                item, dist = tgt, self._item_dist(tgt, decision)
+            res = await step(i, skill, params)
+            r = res.get("result")
+            if skill == "pick" and res.get("held"):
+                item = res["held"].get("name") or item
+                dist = res["held"].get("dist_cm", dist)
+            if res.get("ok"):
+                i += 1
+                continue
+            if skill == "pick" and r == "missed" and not retried and not self._stop_req:
+                retried = True
+                self.forget_scene()
+                await step(i, "look", {"target": tgt} if tgt else {}, retry=True)
+                continue                         # the same pick again
+            if r == "stopped":
+                outcome = "stopped"
+                break
+            if skill == "hand_over" and r == "not_taken":
+                await put_back(i)
+                outcome = "not_taken"
+                break
+            refusal = r in ("missed", "not_found", "out_of_reach", "not_taught", "not_graspable", "no_picture")
+            outcome = r if refusal else "failed"
+            if self.held_name():
+                await put_back(i)
+                if not refusal:
+                    outcome = "put_back"
+            break
+        else:
+            last = next((d for d in reversed(done) if d["ok"] and d["skill"] != "look"), None)
+            outcome = {"hand_over": "handed_over", "place": "placed", "point_at": "pointed"}.get(
+                last["skill"] if last else "", "done")
+
+        ok = outcome in ("handed_over", "placed", "pointed", "done")
+        if outcome == "no_picture":
+            line = cast_mod.NO_PICTURE_LINES.get(agent, "")
+        else:
+            line = cast_mod.arm_follow(agent, outcome, item, dist) if outcome != "done" else ""
+        line = merlin.clean_follow(agent, line) if line else ""
+        await self.emit({"type": "arm_plan", "agent": agent, "phase": "done", "result": outcome, "ok": ok,
+                         "steps": done})
+        detail = "; ".join(f"{d['skill']}: {d['result']}" for d in done)
+        return {"ok": ok, "result": outcome, "detail": detail, "skill": "plan", "steps": done, "item": item,
+                "say": line}
 
     async def _gesture(self, agent: str, seconds: float, set_states: bool) -> dict:
         seconds = round(min(10.0, max(1.5, float(seconds))), 2)
@@ -236,14 +414,29 @@ class Pipeline:
         names = merlin.names_in(text)
         return bool(names) and names[0] == "merlin"
 
-    async def make_plan(self, chosen: str, text: str, group: str | None = None, lead: str | None = None) -> dict:
+    async def make_plan(self, chosen: str, text: str, group: str | None = None, lead: str | None = None,
+                        look: dict | None = None) -> dict:
         """LLM plan plus Merlin's check. Returns plan, issues, replaced, provider info, decision.
 
-        group is "lead" or "helper" when everyone was asked; a helper only chips in a line."""
+        group is "lead" or "helper" when everyone was asked; a helper only chips in a line.
+        look is what the camera saw (look_scene) for a desk job or a desk question."""
         decision = cast_mod.decide(chosen, text, self.now_fn())
         if group:
             decision["group"] = group
             decision["lead"] = lead or chosen
+        if decision.get("desk") and group != "helper":
+            decision["held"] = self.held_name()
+            if look is not None and look.get("result") == "no_picture":
+                decision["no_picture"] = True
+            elif look is not None and look.get("ok"):
+                decision["scene"] = look.get("scene")
+                decision["person"] = look.get("person")
+            if decision.get("no_picture"):
+                # Said plainly, nothing moves, no LLM needed.
+                plan = {"agent": chosen, "say": cast_mod.NO_PICTURE_LINES[chosen], "arm": None, "laptop": []}
+                cast_mod.remember(chosen, text, "done")
+                return {"plan": plan, "issues": ["no picture from the overhead camera"], "replaced": False,
+                        "provider": {}, "decision": decision}
         info: dict = {}
         try:
             raw, info = await providers.get_json(
@@ -375,21 +568,28 @@ class Pipeline:
             return again, "asked again", "rules"
         if cast_mod.is_bottle_job(text):
             return "ban", "the bottle", "rules"
+        desk = cast_mod.desk_kind(text)
+        if desk == "question":
+            return "gowther", "a question about the desk", "rules"
+        # A desk job's look takes about 3 s anyway, so Claude gets a little longer to answer there.
+        cap = merlin.ROUTE_TIMEOUT_S + (merlin.DESK_ROUTE_EXTRA_S if desk == "job" else 0.0)
         try:
             raw, _info = await asyncio.wait_for(
                 providers.get_json(merlin.ROUTE_PROVIDER, merlin.ROUTE_SYSTEM, merlin.route_prompt(text),
                                    agent="merlin", models=self.models),
-                merlin.ROUTE_TIMEOUT_S,
+                cap,
             )
             got = merlin.check_route_reply(raw)
             if got:
                 return got[0], got[1], "claude"
             await self.error("route", "routing answer named nobody valid, used the fixed rules")
         except asyncio.TimeoutError:
-            await self.error("route", f"routing took over {merlin.ROUTE_TIMEOUT_S:.0f} s, used the fixed rules")
+            await self.error("route", f"routing took over {cap:.1f} s, used the fixed rules")
         except providers.ProviderError as e:
             await self.error("route", f"routing failed, used the fixed rules: {str(e)[:150]}")
         agent, why = merlin.job_kind(text)
+        if desk == "job" and agent is None:
+            return (*merlin.desk_rule(text, self.rng), "rules")
         return merlin.choose_by_role(text, self.rng), why or "nobody in particular", "rules"
 
     async def route(self, text: str, agent: str | None, force_argue: bool | None) -> dict:
@@ -428,10 +628,19 @@ class Pipeline:
         run = _Run()
         await self.emit({"type": "request", "text": text, "named_agent": self.resolve_named(text, agent)})
         merlin_out: dict | None = None
+        self._stop_req = False
+        timing: dict = {}
+        t_start = time.monotonic()
         try:
             for cid in AGENT_IDS:
                 await self.set_state(cid, "listening")
+            # A desk job or a desk question looks at the desk first, at the same time as the routing.
+            desk = None if cast_mod.is_bottle_job(text) else cast_mod.desk_kind(text)
+            scene_task = None
+            if desk and self.use_arm and self.arm is not None:
+                scene_task = asyncio.ensure_future(self.look_scene())
             route = await self.route(text, agent, force_argue)
+            timing["route_ms"] = int((time.monotonic() - t_start) * 1000)
 
             if route["ask_merlin"]:
                 await self.set_state("merlin", "thinking")
@@ -447,7 +656,21 @@ class Pipeline:
             chosen = route["chosen"]
             group = route["group"]
             merlin.note_chosen(chosen)
-            plan_task = asyncio.ensure_future(self.make_plan(chosen, text, "lead" if group else None))
+            if desk == "job":
+                merlin.note_arm_holder(chosen)
+
+            async def lead_plan() -> dict:
+                look = None
+                if scene_task is not None:
+                    look = await scene_task
+                    timing["look_ms"] = look.get("ms")
+                    timing["look_ready_ms"] = int((time.monotonic() - t_start) * 1000)
+                r = await self.make_plan(chosen, text, "lead" if group else None, look=look)
+                r["look"] = look
+                timing["plan_ready_ms"] = int((time.monotonic() - t_start) * 1000)
+                return r
+
+            plan_task = asyncio.ensure_future(lead_plan())
             helper_tasks = [asyncio.ensure_future(self.make_plan(h, text, "helper", chosen)) for h in group[1:]]
 
             if route["mline"] is None:
@@ -501,6 +724,7 @@ class Pipeline:
             await self.emit(
                 {"type": "say", "agent": chosen, "text": plan["say"], "audio_url": clip["audio_url"], "duration_s": clip["duration_s"]}
             )
+            timing["first_say_ms"] = int((time.monotonic() - t_start) * 1000)
             gesture_task = None
             if plan["arm"] is None:
                 gesture_task = self.queue_gesture(run, chosen, clip["duration_s"])
@@ -514,6 +738,13 @@ class Pipeline:
                     followups.append(await self.say_line(run, chosen, line, gesture=plan["arm"] is None))
                     if plan["arm"] is None:
                         gesture_task = run.chain
+            look = result.get("look")
+            if result["decision"].get("desk") == "question" and look and look.get("ok") and not result["replaced"]:
+                # The answer to "what's on my desk", read from the camera's list, no motion.
+                line = merlin.clean_follow(chosen, cast_mod.scene_answer(chosen, text, look.get("scene")))
+                followups.append(await self.say_line(run, chosen, line, gesture=plan["arm"] is None))
+                if plan["arm"] is None:
+                    gesture_task = run.chain
 
             helpers = []
             for h, task in zip(group[1:], helper_tasks):
@@ -522,7 +753,15 @@ class Pipeline:
                 helpers.append({"agent": h, "say": hres["plan"]["say"]})
 
             arm_result = None
-            if plan["arm"]:
+            if isinstance(plan["arm"], list):
+                await self.set_state(chosen, "has_arm")
+                t_arm = time.monotonic()
+                arm_result = await self.run_plan(chosen, plan["arm"], result["decision"])
+                timing["arm_ms"] = int((time.monotonic() - t_arm) * 1000)
+                if arm_result.get("say"):
+                    # the line that says what really happened
+                    followups.append(await self.say_line(run, chosen, arm_result["say"], gesture=True))
+            elif plan["arm"]:
                 await self.set_state(chosen, "has_arm")
                 skill = plan["arm"]["skill"]
                 params = {k: v for k, v in plan["arm"].items() if k != "skill"}
@@ -546,6 +785,7 @@ class Pipeline:
                 "followups": followups,
                 "group": helpers,
                 "routed": {"why": route["reason"], "by": route["source"]},
+                "timing": timing,
             }
         except Exception as e:  # noqa: BLE001
             await self.error("pipeline", f"{type(e).__name__}: {e}")

@@ -4,6 +4,12 @@
     python -m backend.agents.demo "hand me the bottle" --clock 12:00 --twice
     python -m backend.agents.demo "please hand me the bottle" --clock 12:00 --agents escanor
     python -m backend.agents.demo "open notepad" --dry-tools
+    python -m backend.agents.demo --arm "hand me something to drink" "King, give me the Sharpie"
+
+With --arm every request goes through the whole pipeline in order, on the pretend arm (FakeArm,
+never the real one) with dry laptop tools, and prints who took it, the line, the steps, what each
+step returned, the follow-up line and the times. PHANTOM_FAKE_TIERS=tall,can,low makes every grip
+tier count as taught; PHANTOM_FAKE_TAKEN=0 means nobody takes a handover.
 
 It first prints who Merlin would give the request to. With --dry-tools each plan's laptop calls
 also run in dry-run mode (they work out what they'd open, nothing is opened) and the second line
@@ -21,9 +27,84 @@ from .cast import AGENT_IDS, CAST
 from .pipeline import Pipeline, clock_now
 
 
+def _step_str(s: dict) -> str:
+    p = s.get("params") or {}
+    what = p.get("target") or p.get("where")
+    if isinstance(what, dict):
+        what = what.get("near") and f"near {what['near']} ({what.get('side')})" or f"({what.get('x_cm')}, {what.get('y_cm')})"
+    knobs = ", ".join(f"{k} {p[k]}" for k in ("pace", "approach", "lift_cm_style", "wait_s") if k in p)
+    return f"{s['skill']}" + (f" {what}" if what else "") + (f" [{knobs}]" if knobs else "")
+
+
+async def run_on_arm(args, now_fn, models) -> None:
+    """Every request in order through the whole pipeline, on the pretend arm only."""
+    import time
+
+    from backend.arm import FakeArm   # never RealArm here
+
+    from backend import tools
+    tools.set_dry_run(True)
+    events: list[dict] = []
+
+    async def emit(ev: dict) -> None:
+        events.append(ev)
+
+    arm = FakeArm(time_scale=args.arm_scale)
+    p = Pipeline(arm, emit, speak=args.voice, run_tools=True, pace_audio=False, now_fn=now_fn, models=models or None)
+    cast_mod.reset_memory()
+    try:
+        import anthropic  # noqa: F401 - slow first import, done before the timed routing call
+    except ImportError:
+        pass
+    print(f"pretend arm, taught tiers {sorted(arm.taught)}, time scale {args.arm_scale}, nobody takes: {not arm.hand_taken}")
+    import copy
+
+    from backend.arm.fake import FAKE_SCENE
+    for text in args.text:
+        if args.fresh_desk:
+            arm.scene_items = copy.deepcopy(FAKE_SCENE)    # every request starts from the same desk
+        events.clear()
+        t0 = time.monotonic()
+        res = await p.handle(text, None, force_argue=False if not args.argue else None)
+        total = time.monotonic() - t0
+        plan = res["plan"]
+        print(f'\n> "{text}"')
+        m = res.get("merlin")
+        print(f"  {CAST[res['agent']]['name']} ({(res.get('routed') or {}).get('by')}: {(res.get('routed') or {}).get('why')})"
+              + (f"; Merlin: {m['say']}" if m else ""))
+        print(f"  says: {res['say']}")
+        arm_plan = plan["arm"]
+        if isinstance(arm_plan, list):
+            print("  steps: " + "; ".join(_step_str(s) for s in arm_plan))
+            ar = res["arm_result"]
+            print("  ran:   " + "; ".join(f"{s['skill']} {s['result']}" + (" (retry)" if s.get("retry") else "")
+                                          + (" (cached)" if s.get("cached") else "")
+                                          + (" (recovery)" if s.get("recovery") else "") for s in ar["steps"]))
+            print(f"  result: {ar['result']}")
+        elif arm_plan:
+            print(f"  arm: {json.dumps(arm_plan)} -> {(res['arm_result'] or {}).get('result')}")
+        else:
+            print("  arm: none")
+        for f in res["followups"]:
+            print(f"  then: {f['text']}")
+        if res["check"]["issues"]:
+            print(f"  check: {'; '.join(res['check']['issues'])}")
+        t = res.get("timing") or {}
+        print(f"  times: route {t.get('route_ms')} ms, look {t.get('look_ms')} ms (ready at {t.get('look_ready_ms')}), "
+              f"plan ready {t.get('plan_ready_ms')} ms, first line {t.get('first_say_ms')} ms, arm {t.get('arm_ms')} ms, "
+              f"whole request {total:.1f} s")
+        for e in events:
+            if e.get("type") == "error":
+                print(f"  error event: {e['where']}: {e['message']}")
+
+
 async def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("text")
+    ap.add_argument("text", nargs="+", help="the request (with --arm, several requests in order)")
+    ap.add_argument("--arm", action="store_true", help="run each request through the whole pipeline on the pretend arm")
+    ap.add_argument("--arm-scale", type=float, default=0.2, help="pretend arm time scale (1.0 is real time)")
+    ap.add_argument("--argue", action="store_true", help="with --arm, let the argument happen as it would live")
+    ap.add_argument("--fresh-desk", action="store_true", help="with --arm, put the six items back before each request")
     ap.add_argument("--clock", help="fake laptop time HH:MM for Escanor")
     ap.add_argument("--agents", default=",".join(AGENT_IDS))
     ap.add_argument("--twice", action="store_true", help="ask each agent a second time")
@@ -45,6 +126,11 @@ async def main() -> None:
         models["gemini"] = args.gemini_model
     if args.openai_model:
         models["openai"] = args.openai_model
+
+    if args.arm:
+        await run_on_arm(args, now_fn, models)
+        return
+    args.text = args.text[0]
 
     if args.dry_tools:
         from backend import tools

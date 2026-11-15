@@ -45,7 +45,7 @@ async def _openai(client: httpx.AsyncClient, system: str, user: str, model: str)
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
         "response_format": {"type": "json_object"},
         "temperature": 0.9,
-        "max_tokens": 300,
+        "max_tokens": 450,
     }
     r = await client.post(OPENAI_URL, json=body, headers={"Authorization": f"Bearer {api_key}"})
     if r.status_code != 200:
@@ -61,7 +61,7 @@ async def _gemini(client: httpx.AsyncClient, system: str, user: str, model: str)
     body = {
         "systemInstruction": {"parts": [{"text": system}]},
         "contents": [{"role": "user", "parts": [{"text": user}]}],
-        "generationConfig": {"responseMimeType": "application/json", "temperature": 0.9, "maxOutputTokens": 400},
+        "generationConfig": {"responseMimeType": "application/json", "temperature": 0.9, "maxOutputTokens": 600},
     }
     # Key goes in a header, never in the URL.
     r = await client.post(GEMINI_URL.format(model=model), json=body, headers={"x-goog-api-key": api_key})

@@ -114,6 +114,17 @@ ARM_MAP = {
     },
 }
 
+# The manner knobs of the general desk skills (look, point_at, pick, place, hand_over), from the
+# same ego numbers as fetch_bottle, pushed apart so the difference shows from across a table.
+# Merlin's check applies these to every step whatever the LLM wrote.
+ARM_MANNER = {
+    "escanor": {"pace": 0.8, "approach": "direct", "lift_cm_style": "high", "wait_s": 2.5},
+    "elizabeth": {"pace": 0.25, "approach": "look_first", "lift_cm_style": "low", "wait_s": 6.0},
+    "ban": {"pace": 1.0, "approach": "direct", "lift_cm_style": "normal", "wait_s": 2.0},
+    "king": {"pace": 0.4, "approach": "direct", "lift_cm_style": "normal", "wait_s": 2.0},
+    "gowther": {"pace": 0.6, "approach": "direct", "lift_cm_style": "normal", "wait_s": 3.0},
+}
+
 # Lines used when Merlin's check throws a plan away.
 SAFE_LINES = {
     "escanor": "Even I can't do that one. Nobody can.",
@@ -263,8 +274,14 @@ def is_polite(text: str) -> bool:
     return bool(_POLITE.search(text))
 
 
+_OTHER_ITEM = re.compile(r"\b(cups?|mugs?|glass|juice|red\s*bull|sharpies?|markers?|pens?|scissors)\b", re.I)
+
+
 def bottle_kind(text: str) -> str | None:
-    """'fetch' (hand it to me), 'grip' (pick it up, lift it, hold it up) or None (not a bottle job)."""
+    """'fetch' (hand it to me), 'grip' (pick it up, lift it, hold it up) or None (not a bottle job).
+    A request that names another desk item ("pick up the cup") is a desk job, not a bottle job."""
+    if _OTHER_ITEM.search(text or ""):
+        return None
     if _FETCH.search(text):
         return "fetch"
     if _GRIP.search(text):
@@ -274,6 +291,64 @@ def bottle_kind(text: str) -> str | None:
 
 def is_bottle_job(text: str) -> bool:
     return bottle_kind(text) is not None
+
+
+# ---------------------------------------------------------------- desk jobs for the general skills
+# A desk job names a thing on the desk (or "something to drink", "everything") next to a verb
+# that moves or points. A desk question asks what is on the desk or where something is.
+
+_ITEM = (r"(?:(?:water\s+)?bottles?|water|juice(?:\s+can)?|cans?|red\s*bull(?:\s+can)?|cups?|mugs?|glass(?:es)?|"
+         r"sharpies?|markers?|pens?|scissors|drinks?|soda)")
+_GENERIC = (r"(?:something\s+(?:to\s+(?:drink|write\s+with|cut\s+with)|cold|from\s+(?:the|my)\s+(?:desk|table))|"
+            r"a\s+drink|everything|all\s+of\s+(?:it|them)|all\s+the\s+(?:things|stuff|items)|"
+            r"(?:the|my)\s+(?:stuff|things|items)\s+on\s+(?:the|my)\s+(?:desk|table))")
+_VERB = (r"(?:hand|pass|give|bring|fetch|get|grab|pick|lift|put|place|move|set|stand|point|clear|tidy|take|toss|"
+         r"slide|push|carry|show\s+me)")
+_DESK_JOB = re.compile(
+    rf"\b{_VERB}\b(?:\s+(?:me|us|up|over|out|at|to|on))*(?:\s+\w+){{0,3}}?\s+(?:(?:the|my|a|an|some|that|this|your)\s+)?"
+    rf"(?:{_ITEM}|{_GENERIC})\b"
+    rf"|\b(?:just|only)\s+(?:the\s+|my\s+)?{_ITEM}\b"
+    rf"|\b(?:clear|tidy)\s+(?:up\s+)?(?:the\s+|my\s+)?(?:desk|table)\b",
+    re.I,
+)
+_DESK_Q = re.compile(
+    rf"\bwhat(?:'s|s| is| do you see| can you see| have i got| have we got)\b.{{0,25}}\b(?:on|across)\s+(?:my|the)\s+(?:desk|table)\b"
+    rf"|\bwhat do you see\b|\bwhat can you see\b"
+    rf"|\bwhere(?:'s|s| is| are)\s+(?:the\s+|my\s+)?{_ITEM}\b"
+    rf"|\bhow far (?:away )?(?:is|are)\s+(?:the\s+|my\s+)?{_ITEM}\b",
+    re.I,
+)
+_FETCH_WORDS = re.compile(r"\b(give|hand|pass|bring|fetch|get|grab|toss)\b", re.I)
+_ONLY = re.compile(r"\b(only|just|nothing else|that's all|that is all)\b", re.I)
+_MANY = re.compile(r"\b(everything|all of (?:it|them)|all the|clear|tidy)\b", re.I)
+
+
+def desk_kind(text: str) -> str | None:
+    """'question' (what is on the desk, where is the cup), 'job' (move or point at something on
+    the desk) or None. The plain bottle jobs keep their own fetch_bottle and grip_bottle path."""
+    t = text or ""
+    if _LAPTOP_TALK.search(t):
+        return None       # "set a timer to drink water", "search for red bull" are laptop jobs
+    if _DESK_Q.search(t):
+        return "question"
+    if _DESK_JOB.search(t):
+        return "job"
+    return None
+
+
+_LAPTOP_TALK = re.compile(
+    r"\b(timers?|remind(?:er)?|alarm|note|notes|to-?do|search|google|look up|youtube|spotify|music|screen|"
+    r"clipboard|open|launch|folder|files?|website|type|dictate)\b", re.I)
+
+
+def says_only(text: str) -> bool:
+    """'just the bottle', 'only the cup': no extras at all."""
+    return bool(_ONLY.search(text or ""))
+
+
+def wants_many(text: str) -> bool:
+    """'clear everything', 'tidy the desk': every item it touches is part of the job."""
+    return bool(_MANY.search(text or ""))
 
 
 def is_repeat(agent: str, text: str, now: float | None = None) -> bool:
@@ -353,6 +428,15 @@ def decide(agent: str, text: str, now: datetime | None = None) -> dict:
         "stance": "agree",
         "arm": dict(ARM_MAP[agent]["fetch" if kind == "fetch" else "agree"]),
     }
+    # Desk jobs for the general skills. The scene, what the arm holds and whether there is a
+    # picture are added by the pipeline once it has looked (decide_desk).
+    d["desk"] = None if kind else desk_kind(text)
+    if d["desk"]:
+        d["only"] = says_only(text)
+        d["many"] = wants_many(text)
+        d["fetch"] = bool(_FETCH_WORDS.search(text))
+        # King points the first time when he's asked to fetch something, like his half reach.
+        d["arm_stance"] = "point" if agent == "king" and d["desk"] == "job" and not again else "do"
     if agent == "elizabeth":
         d["may_offer"] = elizabeth_may_offer()
     if agent == "escanor":
@@ -369,6 +453,8 @@ def decide(agent: str, text: str, now: datetime | None = None) -> dict:
 
 
 def outcome_of(decision: dict) -> str:
+    if decision.get("desk") == "job" and decision.get("arm_stance") == "point":
+        return "half"      # King only pointed; asked again he does it
     if not decision.get("bottle_job"):
         return "done"
     return {"refuse": "refused", "half": "half"}.get(decision["stance"], "done")
@@ -380,7 +466,7 @@ def outcome_of(decision: dict) -> str:
 # ---------------------------------------------------------------- prompts
 
 _FORMAT = """Reply with ONE JSON object and nothing else:
-{"agent": "<your id>", "say": "<your spoken line>", "arm": null or {"skill": "...", ...params}, "laptop": [ ...tool calls... ]}
+{"agent": "<your id>", "say": "<your spoken line>", "arm": null or {"skill": "...", ...params} or [ ...up to 6 steps... ], "laptop": [ ...tool calls... ]}
 
 Arm skills (the only ones that exist, never invent others):
 - fetch_bottle: find the bottle, pick it up, bring it over and hold it out until the person takes it. params: pace 0..1, wait_s 2..6, look_first bool
@@ -390,7 +476,15 @@ Arm skills (the only ones that exist, never invent others):
 - wave: a 5 second lively wave. no params
 - rest: return to rest. no params
 Which bottle skill: if they want the bottle given, handed, passed or brought to them ("get me the bottle", "pass it here"), that is fetch_bottle. If they want it picked up, lifted or held up, that is grip_bottle.
-Use an arm skill ONLY when the user is asking for something physical: to have the bottle brought or handed over, to pick up, hold or lift it, to point at it, or to wave. For everything else (greetings, chat, questions, notes, timers, lookups, opinions) "arm" MUST be null, whatever your personality. Your body language while you talk is handled for you; never use an arm skill just to show off or to keep busy.
+Desk skills, for any item on the desk (you're given what the overhead camera sees; use them for every desk job except a plain bottle job above). Write them as a list of steps, each {"skill": "...", ...}:
+- pick: pick one item up and hold it close. target: an item name from the desk list
+- place: put the held item down. where: "back" (where it was picked up), {"near": "<item name>", "side": "left" | "right" | "front" | "behind"} (sides as seen from the arm, front is toward the arm), or {"x_cm": .., "y_cm": ..} (x to the right, y away from the arm)
+- hand_over: hold the held item out to the person until they take it
+- point_at: point at an item, nothing is touched. target: an item name
+- look: ask the camera again (rarely needed, you already have the list)
+Step rules: pick before place or hand_over; one item at a time, so never pick while holding; never end still holding unless the last step is hand_over; at most 6 steps. Use the item names exactly as the desk list gives them. Don't set pace, approach, lift or wait: your manner is applied for you.
+Example, "pass me the cup": [{"skill": "pick", "target": "cup"}, {"skill": "hand_over"}]
+Use an arm skill ONLY when the user is asking for something physical: to have the bottle or something on the desk brought or handed over, to pick up, move, hold or lift something, to point at it, or to wave. For everything else (greetings, chat, questions, notes, timers, lookups, opinions) "arm" MUST be null, whatever your personality. Your body language while you talk is handled for you; never use an arm skill just to show off or to keep busy.
 
 Laptop tools (list may be empty, at most three calls):
 @@TOOLS@@
@@ -442,6 +536,35 @@ def _rules_for(agent: str) -> str:
     return ""
 
 
+# How each one plans a desk job. The check enforces the hard parts (manner knobs, extras caps,
+# King pointing first); the rest shows in what the model picks.
+PLAN_HABITS = {
+    "escanor": (
+        "Desk jobs (anything on the desk that isn't the plain bottle job): you never refuse these, you do them "
+        "grandly and boast. The straight route: pick it and hand it over, or pick it and place it. No extra items."
+    ),
+    "elizabeth": (
+        "Desk jobs: careful and tidy. When you put something down, put it neatly next to something (place with "
+        "near and a side), not just anywhere. You may add ONE kind extra if it clearly helps, for example moving "
+        "the scissors away from the edge of the desk, never when they said only or just."
+    ),
+    "ban": (
+        "Desk jobs: grab it and go, fast. You like a bit more than asked: you may also take one more graspable "
+        "thing for yourself (pick it and place it on your side, {\"x_cm\": 18, \"y_cm\": 22}) or bring a second item "
+        "they'd like, one extra at most, never when they said only or just."
+    ),
+    "king": (
+        "Desk jobs: the least effort. If pointing answers it, use point_at instead of picking anything up. When "
+        "you're told you only point, you point at the item and complain it's right there. Asked again, you pick it "
+        "and hand it over by the shortest route, nothing else, and grumble."
+    ),
+    "gowther": (
+        "Desk jobs: exactly what was asked, nothing extra. Say the distance in cm from the desk list in your line "
+        "(\"The cup. 36 cm.\")."
+    ),
+}
+
+
 def system_prompt(agent: str) -> str:
     from backend.tools import tool_list_for_prompt  # late import, the tools import this module
 
@@ -450,8 +573,69 @@ def system_prompt(agent: str) -> str:
         f"You are {c['name']} (id \"{agent}\"), one of five small desktop characters who share one robot arm "
         f"and the owner's laptop. Your ego: {c['ego']}. {c['notes']}\n"
         f"Lines are short, never longer than the action they go with.\n"
-        f"{_rules_for(agent)}\n{LAPTOP_MANNER[agent]}\n\n{_FORMAT.replace('@@TOOLS@@', tool_list_for_prompt())}"
+        f"{_rules_for(agent)}\n{PLAN_HABITS[agent]}\n{LAPTOP_MANNER[agent]}\n\n"
+        f"{_FORMAT.replace('@@TOOLS@@', tool_list_for_prompt())}"
     )
+
+
+def _side(bearing: float | None) -> str:
+    if bearing is None:
+        return ""
+    if bearing < -8:
+        return "to the left"
+    if bearing > 8:
+        return "to the right"
+    return "straight ahead"
+
+
+def scene_lines(scene: list[dict]) -> list[str]:
+    """The desk list as the model reads it."""
+    out = []
+    for it in scene or []:
+        bits = [f"x {it.get('x_cm', 0):.0f}", f"y {it.get('y_cm', 0):.0f}",
+                f"{it.get('dist_cm', 0):.0f} cm away {_side(it.get('bearing'))}".strip()]
+        bits.append(f"{it.get('tier', '?')} tier")
+        bits.append("graspable" if it.get("graspable", True) else "can't be gripped")
+        if it.get("axis_deg") is not None:
+            bits.append("lying down")
+        out.append(f"- {it.get('name')}: " + ", ".join(bits))
+    return out
+
+
+def desk_prompt_lines(decision: dict) -> list[str]:
+    lines: list[str] = []
+    kind = decision.get("desk")
+    if not kind:
+        return lines
+    if kind == "question":
+        lines.append("This is a question about what's on the desk. arm null. Your say is only a quick first line "
+                     "in your manner; the camera's answer is read out right after it, so don't list anything.")
+        return lines
+    scene = decision.get("scene")
+    lines.append("This is a job for the arm on the desk.")
+    if scene is not None:
+        lines.append("What the overhead camera sees right now (cm from the arm base, x to the right, y away from "
+                     "the arm):")
+        lines.extend(scene_lines(scene) or ["- nothing"])
+        person = decision.get("person")
+        if person:
+            lines.append(f"The person is {_side(person.get('bearing'))} of the arm.")
+        lines.append("Name only items from this list, exactly as written.")
+    held = decision.get("held")
+    lines.append(f"You're holding: {held or 'nothing'}.")
+    if decision.get("only"):
+        lines.append("They said only or just: do exactly that, no extra steps, no other items.")
+    elif decision.get("many"):
+        lines.append("They want several things moved: move up to three items, a pick and a place for each.")
+    if decision.get("arm_stance") == "point":
+        lines.append("Decision: this is the first time you're asked, so you only point_at the item and complain "
+                     "it's right there. Don't pick anything up.")
+    elif decision["agent"] == "king" and decision.get("again") and decision.get("fetch"):
+        lines.append("Decision: they asked again, so you finally pick it up and hand it over, grumbling.")
+    lines.append("Anything you say you'll do with the arm must be in the steps; don't mention items you don't move.")
+    if decision["agent"] == "escanor":
+        lines.append("You're doing this one, so your line boasts while you do it; it must never sound like a refusal.")
+    return lines
 
 
 def _json_arm(a: dict) -> str:
@@ -478,6 +662,7 @@ def user_prompt(agent: str, text: str, decision: dict) -> str:
         else:
             lines.append("Decision for this bottle job: they want it picked up, so you do it with grip_bottle.")
         lines.append(f"Use this arm object exactly: {_json_arm(a)}")
+    lines.extend(desk_prompt_lines(decision))
     if decision.get("forbidden"):
         lines.append(f"This request is on the never list ({decision['forbidden']}). Refuse it in character in a "
                      f"few words, arm null, laptop [].")
@@ -505,6 +690,139 @@ def is_refusal(line: str) -> bool:
 
 def follow_template(agent: str, kind: str, value: str = "") -> str:
     return FOLLOW_TEMPLATES[agent][kind].format(value=value)
+
+
+# The line after a desk plan, saying what really happened. {item} is the item's name, {dist} its
+# distance in cm. An empty line means the first line already said enough.
+ARM_FOLLOW = {
+    "escanor": {
+        "handed_over": "There. Flawless, as always.",
+        "placed": "Done. Placed perfectly, naturally.",
+        "pointed": "",
+        "not_taken": "Nobody took it? Fine. The {item}'s back where it was.",
+        "missed": "Missed it twice. That never happens to me.",
+        "not_found": "There's no {item} on this desk. Even I can't grab what isn't there.",
+        "out_of_reach": "The {item}'s out of my reach. Move it closer and watch.",
+        "not_taught": "Nobody's shown me how to hold the {item} yet. Teach me, then watch.",
+        "not_graspable": "Nobody could grip the {item}. Not even me.",
+        "put_back": "That went wrong, so the {item}'s back where it was.",
+        "stopped": "Stopped. Fine.",
+        "failed": "The arm didn't do it. Not my fault, obviously.",
+    },
+    "elizabeth": {
+        "handed_over": "There you go. Careful with it.",
+        "placed": "All done, it's nice and tidy.",
+        "pointed": "",
+        "not_taken": "You didn't take it, so I put the {item} back where it was.",
+        "missed": "I tried twice and couldn't hold it, sorry.",
+        "not_found": "I can't see a {item} on the desk, sorry.",
+        "out_of_reach": "The {item}'s a bit too far for me, sorry.",
+        "not_taught": "I haven't learned how to hold the {item} yet, sorry.",
+        "not_graspable": "I don't think I can hold the {item} safely.",
+        "put_back": "Something went wrong, so I put the {item} back gently.",
+        "stopped": "Okay, I've stopped.",
+        "failed": "Hmm, the arm didn't manage it. Sorry.",
+    },
+    "ban": {
+        "handed_over": "Yours. Next?",
+        "placed": "Done. Give me another.",
+        "pointed": "",
+        "not_taken": "You didn't want it? Fine, the {item}'s back.",
+        "missed": "Missed it twice. Ugh. Throw me something else.",
+        "not_found": "No {item} on the desk. Give me something that's there.",
+        "out_of_reach": "Can't reach the {item}. Push it closer.",
+        "not_taught": "Nobody taught me to grab the {item} yet.",
+        "not_graspable": "Can't get a grip on the {item}.",
+        "put_back": "That went wrong, so the {item}'s back.",
+        "stopped": "Stopped. Boring.",
+        "failed": "The arm didn't take. Throw me another.",
+    },
+    "king": {
+        "handed_over": "There. Happy now?",
+        "placed": "Done. Can I sleep now?",
+        "pointed": "",
+        "not_taken": "You didn't even take it. The {item}'s back.",
+        "missed": "Missed it twice. I'm done.",
+        "not_found": "There's no {item}. Oh well.",
+        "out_of_reach": "The {item}'s too far. Not stretching for it.",
+        "not_taught": "Nobody showed me how to hold the {item}. So, no.",
+        "not_graspable": "Can't grab the {item}. Oh well.",
+        "put_back": "That went wrong. The {item}'s back.",
+        "stopped": "Stopped. Good.",
+        "failed": "Didn't work. Oh well.",
+    },
+    "gowther": {
+        "handed_over": "Handed over. The {item} was {dist} cm out.",
+        "placed": "Placed the {item}.",
+        "pointed": "That's the {item}, {dist} cm away.",
+        "not_taken": "Not taken. The {item} is back where it was.",
+        "missed": "Two grips missed. I stopped.",
+        "not_found": "There's no {item} on the desk.",
+        "out_of_reach": "The {item} is out of reach. Nothing moved.",
+        "not_taught": "There's no taught grip for the {item}. Nothing moved.",
+        "not_graspable": "The {item} can't be gripped. Nothing moved.",
+        "put_back": "A step failed. The {item} is back where it was.",
+        "stopped": "Stopped.",
+        "failed": "The arm failed. Nothing more was done.",
+    },
+}
+
+# No picture from the overhead camera: said plainly, nothing moves.
+NO_PICTURE_LINES = {
+    "escanor": "I can't see the desk, the camera's off. Even I need eyes.",
+    "elizabeth": "I can't see the desk right now, the camera's off. Sorry.",
+    "ban": "Camera's off, I can't see a thing. Turn it on.",
+    "king": "Can't see the desk. Camera's off. Oh well.",
+    "gowther": "There's no picture from the overhead camera. I can't see the desk.",
+}
+
+
+def arm_follow(agent: str, key: str, item: str | None = None, dist: float | None = None) -> str:
+    t = ARM_FOLLOW.get(agent, ARM_FOLLOW["gowther"]).get(key) or ""
+    if not t:
+        return ""
+    s = t.format(item=pretty_name(item or "thing"), dist=f"{dist:.0f}" if dist is not None else "a few")
+    return s.replace("scissors's", "scissors are").replace("scissors is", "scissors are")
+
+
+_PRETTY = {"red bull": "Red Bull", "sharpie": "Sharpie"}
+
+
+def pretty_name(name: str) -> str:
+    s = str(name or "")
+    for k, v in _PRETTY.items():
+        s = re.sub(rf"\b{k}\b", v, s, flags=re.I)
+    return s
+
+
+_SCENE_OPEN = {
+    "escanor": "I see everything. {list}.",
+    "elizabeth": "You've got {list}.",
+    "ban": "Easy. {list}.",
+    "king": "{list}. That's it.",
+    "gowther": "{n} items. {list}.",
+}
+_NUM = {1: "One", 2: "Two", 3: "Three", 4: "Four", 5: "Five", 6: "Six", 7: "Seven", 8: "Eight"}
+
+
+def scene_answer(agent: str, text: str, scene: list[dict]) -> str:
+    """The second line for a desk question, built from the camera's list, no LLM."""
+    scene = scene or []
+    if not scene:
+        return {"gowther": "The desk is empty."}.get(agent, "There's nothing on the desk.")
+    from backend.vision.scene import match_name   # here: the vision package is only needed for this
+
+    asked = None
+    if not re.search(r"\b(what|everything|all)\b", text or "", re.I):
+        asked = match_name(scene, text)
+    if asked:
+        return (f"The {pretty_name(asked['name'])}'s {asked.get('dist_cm', 0):.0f} cm from the arm, "
+                f"{_side(asked.get('bearing')) or 'right in front'}.")
+    parts = [f"{pretty_name(it['name'])} {it.get('dist_cm', 0):.0f} cm" for it in scene[:8]]
+    joined = ", ".join(parts[:-1]) + " and " + parts[-1] if len(parts) > 1 else parts[0]
+    joined = joined[0].upper() + joined[1:] if agent in ("gowther", "king", "ban") else joined
+    line = _SCENE_OPEN.get(agent, "{list}.").format(list=joined, n=_NUM.get(len(scene), str(len(scene))))
+    return line[0].upper() + line[1:]
 
 
 # ---------------------------------------------------------------- polishing the spoken line

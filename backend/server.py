@@ -121,6 +121,7 @@ async def api_stt(file: UploadFile = File(...)):
 @app.post("/api/stop")
 async def api_stop():
     arm = get_arm()
+    get_pipeline().request_stop()     # a desk plan runs no further steps
     await asyncio.to_thread(arm.stop)
     return {"ok": True}
 

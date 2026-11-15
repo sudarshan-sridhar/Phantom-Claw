@@ -61,8 +61,43 @@ One JSON object. Free text never drives the arm.
 
 - `agent`: one of the five agent ids.
 - `say`: the spoken line, at most 140 characters.
-- `arm`: `null`, or an object with `skill` from the list below. Anything else is rejected by Merlin's check.
+- `arm`: `null`, or an object with `skill` from the list below (the single-skill form), or a list of up to 6 steps (the desk plan form, see "Desk plans"). Anything else is rejected by Merlin's check.
 - `laptop`: a list, possibly empty, of tool calls from the list below.
+
+### Desk plans (the general skills)
+
+For anything on the desk other than the plain bottle jobs, `arm` is a list of at most 6 steps, run in order:
+
+```json
+"arm": [{"skill": "pick", "params": {"target": "red bull can"}}, {"skill": "hand_over", "params": {}}]
+```
+
+A step may also be written flat (`{"skill": "pick", "target": "cup"}`); the check turns it into `{skill, params}`. A single general skill written as an object is read as a one-step list, and a one-step list holding an old skill is turned back into the single-skill form. Allowed in a step: every old skill above except `gesture`, plus `look`, `point_at`, `pick`, `place`, `hand_over` (parameters, results and phases in `backend/arm/README.md`).
+
+Merlin's check, for every step list:
+- An unknown or forbidden skill anywhere, or a step that isn't an object, replaces the whole plan with the safe one.
+- Unknown parameters are dropped. `target` and `where` are cleaned by the arm's own `validate`; an item name is changed to the matching name in the scene list. `pick` and `point_at` without a target are dropped.
+- The manner knobs are set from the character, whatever the model wrote (below).
+- Order: `place` and `hand_over` only after a `pick` in the same plan or when `status()["held"]` says something is held; no `pick` while holding; while holding only `look`, `place`, `hand_over` and `rest`; a `place` written right after a `hand_over` (for "nobody took it") is dropped because the runner does that. A plan never ends holding: unless the last step is `hand_over`, a `place` with `where: "back"` is added.
+- Extras (a `pick` or `point_at` of an item the owner didn't name): allowed only when the item is graspable and 15 to 45 cm from the base, within the character's cap (Ban 1, Elizabeth 1, the others 0), and never when the owner says "only" or "just". For a request that names no item ("something to drink") the first item is the job, not an extra; "everything", "all", "clear" and "tidy" make every item part of the job.
+- A desk question, or no picture from the overhead camera: no motion at all.
+- In a desk job with the bottle in the scene, `fetch_bottle` becomes `pick` the bottle plus `hand_over`, and `grip_bottle` becomes `pick` plus `place` `"back"`, so the plan works from the scene like any other item.
+- Anything the line promises must be in the steps (the prompt says so; the check can't read the line).
+- King, the first time he's asked to fetch something from the desk: the plan becomes one `point_at` at the item (he complains); asked again ("I said...", or the same request again) he picks it and hands it over. He never adds a `look`.
+
+Manner knobs per character (the fetch_bottle ego numbers, pushed apart so they show across a table):
+
+| id | pace | approach | lift_cm_style | wait_s |
+|---|---|---|---|---|
+| escanor | 0.8 | direct | high | 2.5 |
+| elizabeth | 0.25 | look_first | low | 6 |
+| ban | 1.0 | direct | normal | 2 |
+| king | 0.4 | direct | normal | 2 |
+| gowther | 0.6 | direct | normal | 3 |
+
+Planning habits in the prompts: Escanor does every desk job grandly and boasts, straight route, no extras. Elizabeth puts things down neatly next to something and may add one kind extra (the scissors away from the edge). Ban grabs and goes and may take one more thing for himself or bring a second item. King points when pointing answers it. Gowther does exactly what was asked and says the distance in cm. Merlin never carries; she hands desk jobs on and settles arguments.
+
+What counts as a desk job (`cast.desk_kind`): a moving or pointing verb with a desk item, "something to drink", "everything" and similar, or "just/only the <item>". A desk question: "what's on my desk", "what do you see", "where is the <item>", "how far is the <item>". A request about timers, notes, searches, music, the screen or files is never a desk job. A request that names another desk item ("pick up the cup") is not a bottle job.
 
 ### Arm skills (the only ones that exist)
 
@@ -167,7 +202,9 @@ class Arm(Protocol):
   - rest: `start`, `returning`, `done`, with `put_back` after `start` when it first puts a held bottle down.
 - `stop()` holds every arm joint where it is at any stage, never switches torque off, and leaves the gripper's squeeze alone (a held bottle stays held).
 - After `stopped` or `error` the arm is out of rest. The next skill sends it to rest first by itself: the pipeline runs `rest` (its `arm` events carry `"auto": true`, starting with phase `auto_rest`, and the skill's result carries `auto_rest` with the rest result); a `gesture` that would follow is skipped. The arm does the same as a backstop when used directly (phase `auto_rest`, then the skill).
-- `status()` also gives `at_rest` and `holding` (the gripper squeezing something).
+- `status()` also gives `at_rest`, `holding` (the gripper squeezing something) and `held` (the item a `pick` left in the carry pose, as in a scene entry, or null).
+- While holding (after `pick`, before `place`, `hand_over` or `rest`), a `gesture` is skipped (result `done`, `skipped: true`, nothing moves) and any skill other than `look`, `place`, `hand_over` and `rest` returns `hands_full` without moving. The pipeline does not send the arm to rest before a skill while `held` is set, so a gesture never puts a carried item down.
+- General skills (`look`, `point_at`, `pick`, `place`, `hand_over`): see `backend/arm/README.md`. Their extra results: `holding`, `placed`, `not_found`, `no_picture`, `not_taught`, `not_graspable`, `nothing_held`, `not_taken`, `hands_full`; `ok` is also true for `holding` and `placed`.
 - Two classes: `RealArm` (serial port COM3) and `FakeArm` (sleeps for realistic durations, no hardware). The server uses `FakeArm` unless the environment variable `PHANTOM_ARM=real` is set. FakeArm switches for fetch_bottle: `PHANTOM_FAKE_FETCH` (an outcome name), `PHANTOM_FAKE_OVERHEAD=0` (pretend the phone is off), `PHANTOM_FAKE_MISS=1`.
 - Only one skill runs at a time. A second request while busy is refused with result `busy`.
 
@@ -175,7 +212,7 @@ class Arm(Protocol):
 
 - `POST /api/request` body `{"text": str, "agent": str | null}`. Runs the whole pipeline. Returns `{"agent", "say", "plan", "audio_url", "arm_result"}`, plus `tools` (each tool's result), `followups` (the result lines), `group` (chip-in lines) and `routed` (`{"why", "by"}`). When Merlin answers herself, `agent` is `merlin`.
 - `POST /api/stt` multipart audio file. Returns `{"text"}` (ElevenLabs speech to text).
-- `POST /api/stop`. Stops the arm.
+- `POST /api/stop`. Stops the arm, and a running desk plan runs no further steps.
 - `GET /api/cast`. Returns the cast with names, egos, colours and current state.
 - `GET /api/status`. Returns arm status and which providers answered last.
 - `GET /audio/{file}`. Serves saved speech.
@@ -187,7 +224,10 @@ class Arm(Protocol):
 | `merlin` | `chosen`, `say`, `audio_url`, `argued` (list of `{agent, say, audio_url}`, may be empty) |
 | `agent_state` | `agent`, `state`: `idle`, `listening`, `thinking`, `speaking`, `has_arm` |
 | `say` | `agent`, `text`, `audio_url` |
-| `arm` | `agent`, `skill`, `phase`, and `auto: true` for an automatic rest |
+| `arm` | `agent`, `skill`, `phase`, and `auto: true` for an automatic rest; in a desk plan also `step` (0 based), `steps` (plan length), and `retry: true` or `recovery: true` on the extra look and put-back steps |
+| `scene` | `agent` (null while Merlin is still routing), `result` (`done`, `no_picture`, `not_found`, `no_arm`, ...), `items` (`name`, `x_cm`, `y_cm`, `dist_cm`, `tier`, `graspable`), `ms`: the look before a desk plan or a desk question |
+| `arm_plan` | `agent`, `phase`: `start` (with `steps`, the checked list) or `done` (with `result`, `ok` and `steps`, what each step returned) |
+| `arm_step` | `agent`, `step`, `skill`, `params`, `result`, `ok`, `detail`, and `cached`, `retry`, `recovery`, `auto_rest` when they apply; one per step run |
 | `note` | `agent`, `text`, `kind`: `note` or `todo` |
 | `timer_done` | `agent`, `label` |
 | `error` | `where`, `message` |
@@ -201,13 +241,21 @@ Pipeline for one request:
    - notes, to-dos, dictation: King
    - the screen, the clipboard, exact facts about the machine, code and commands: Gowther
    - the bottle: whoever is named, otherwise Ban
-   Unnamed requests are routed by Claude (`claude-haiku-5-5` through `providers.get_json("anthropic", ...)`, a small JSON answer `{"agent", "kind", "why"}`, 3 s cap). The answer is checked against the cast; on a failure, a timeout or a bad name the fixed rules in `merlin.job_kind` decide (an `error` event with `where: "route"` says so). A request asked again goes back to whoever dodged it, and the bottle goes to Ban, without asking Claude. Safety refusals are decided in code, never by the model.
+   Unnamed requests are routed by Claude (`claude-haiku-5-5` through `providers.get_json("anthropic", ...)`, a small JSON answer `{"agent", "kind", "why"}`, 3 s cap, 4 s for a desk job since its look runs alongside). The answer is checked against the cast; on a failure, a timeout or a bad name the fixed rules in `merlin.job_kind` decide (an `error` event with `where: "route"` says so). A request asked again goes back to whoever dodged it, and the bottle goes to Ban, without asking Claude. Safety refusals are decided in code, never by the model.
    "Everyone" or "all of you": the one picked does the job and one or two others chip in a brief line each (no tools, no arm).
    When the kind of job isn't clear, about one request in four, two agents each say one line wanting or dodging the job before Merlin decides.
 3. The chosen agent's LLM returns the plan. If its provider fails or takes more than 8 s, fall through: gemini to openai, openai to gemini.
 4. Merlin's check validates the plan against this file and clamps the numbers. A bad plan is replaced by a safe one: the agent says it cannot do that, no arm skill.
 5. Speech is generated (cached on disk by voice id and text), `say` is sent, laptop tools run (the ones that answer start while the line is being made), the line with the result is sent as another `say`, any chip-in lines follow, then the arm skill runs with `arm` events.
 6. Agent states are sent throughout. Everyone returns to `idle` at the end.
+
+Desk jobs and desk questions (not the plain bottle jobs, which keep fetch_bottle and grip_bottle):
+- The arm's `look` runs first, at the same time as Merlin's routing (a `scene` event follows). The scene list (names, positions in cm, tier, graspable), the person and `status()["held"]` go into the character's prompt, so the plan names real items. A look is kept for 6 s (`PHANTOM_SCENE_TTL`), so a `look` step in the same plan reuses it.
+- No picture: the character says so in a fixed plain line, no LLM call, nothing moves.
+- A desk question goes to Gowther (unless someone is named) with no Claude call. The first line is a quick one; the answer is built from the scene list in code and spoken as the second line.
+- Unnamed desk jobs are routed by Claude by the kind of job (showy fetch: Escanor; careful or fragile, tidy: Elizabeth; quick grab: Ban; pointing, "where": King; exact placing, distances: Gowther), told who had the arm last so it is shared around. The fixed-rule fallback (`merlin.desk_rule`) does the same with a rotation.
+- The runner runs the steps in order through `run_arm` (same `arm` events, stop handling and auto-rest), checks `/api/stop` between steps, and reacts: `pick` missed, one retry after a fresh `look`, then it gives up; `not_found`, `out_of_reach`, `not_taught`, `not_graspable`, `no_picture` stop the plan; `hand_over` `not_taken` is followed by `place` `"back"`; any other failure while holding is followed by `place` `"back"` (and `rest` if that fails); `stopped` moves nothing more. A last `say` from that character's fixed lines tells what really happened (handed over, placed, not taken and put back, missed twice, not taught, and so on).
+- `arm_result` for a desk plan is `{"ok", "result", "skill": "plan", "steps", "item", "say", "detail"}`; `result` is `handed_over`, `placed`, `pointed`, `done`, `not_taken`, `put_back`, `stopped`, `failed` or the refusal. The response also carries `timing` (`route_ms`, `look_ms`, `look_ready_ms`, `plan_ready_ms`, `first_say_ms`, `arm_ms`).
 
 ## Avatar colours
 
