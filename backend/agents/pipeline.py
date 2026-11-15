@@ -721,7 +721,9 @@ class Pipeline:
             if os.environ.get("PHANTOM_CHATTER", "").strip() != "1" and len(plan["laptop"]) > 1:
                 asked_two = bool(re.search(r"\b(and|then|also)\b", text.lower()))
                 if not asked_two:
-                    plan["laptop"] = plan["laptop"][:1]
+                    # a search keeps the tool that shows the result, not the silent lookup
+                    seen = [c for c in plan["laptop"] if c.get("tool") != "lookup"] or plan["laptop"]
+                    plan["laptop"] = seen[:1]
 
             # Tools that come back with something to say start now, so they run while the first
             # line is being made and played. The rest run once the line is out.
