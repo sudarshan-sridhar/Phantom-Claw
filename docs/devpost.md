@@ -57,4 +57,4 @@ Python, FastAPI, OpenCV, ArUco, Claude, Gemini, OpenAI, ElevenLabs, faster-whisp
 ## Links
 
 - Code: https://github.com/sudarshan-sridhar/Phantom-Claw
-- Demo video: (add the new link here)
+- Demo video: https://youtu.be/MHnvnfpzpcg
