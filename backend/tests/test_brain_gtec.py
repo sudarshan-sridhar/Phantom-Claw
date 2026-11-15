@@ -56,9 +56,9 @@ def test_live_decoder_chooses_each_light_once(tmp_path):
 
 
 def test_mapping_of_lights_to_jobs():
-    assert gtec.request_for(9) == ("request", "give me the bottle")
-    assert gtec.request_for(10) == ("request", "give me the sharpie")
-    assert gtec.request_for(12) == ("request", "give me the scissors")
+    assert gtec.request_for(9) == ("request", "Gowther, give me the bottle")
+    assert gtec.request_for(10) == ("request", "Gowther, give me the sharpie")
+    assert gtec.request_for(12) == ("request", "Gowther, give me the scissors")
     assert gtec.request_for(15) == ("stop", None)
 
 
@@ -86,7 +86,7 @@ def test_busy_reply_is_normal_and_not_retried():
     s = gtec.Sender(live=True, post=post, quiet_s=0.0)
     rec = s.send(10, 2.0)
     assert _wait(lambda: rec["reply"] is not None)
-    assert calls == [("/api/request", {"text": "give me the sharpie"})]
+    assert calls == [("/api/request", {"text": "Gowther, give me the sharpie"})]
     assert "busy" in rec["reply"] and s.busy is False
 
 
