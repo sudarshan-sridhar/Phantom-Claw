@@ -451,6 +451,30 @@ class RealArm:
         a = ACC / max(1.0, k) * (LOAD_ACC_SCALE if loaded else 1.0)
         return max(MIN_LEG_ACC, int(a + 0.5))
 
+    def _level_wrist(self):
+        """Turn the wrist back to level if a pick or a handover left it turned. One slow glide."""
+        try:
+            off = abs(self._rd(5, POSITION) - ROLL_REST)
+            if off > 30:
+                self._go(5, ROLL_REST, 450, acc=8)
+                self._wait(min(1.6, 0.3 + off / 450.0))
+        except _Stopped:
+            raise
+        except Exception:
+            pass
+
+    def _level_wrist(self):
+        """Turn the wrist back to level if a pick or a handover left it turned. One slow glide."""
+        try:
+            off = abs(self._rd(5, POSITION) - ROLL_REST)
+            if off > 30:
+                self._go(5, ROLL_REST, 450, acc=8)
+                self._wait(min(1.6, 0.3 + off / 450.0))
+        except _Stopped:
+            raise
+        except Exception:
+            pass
+
     def _leg_back(self, dur, roll=None, acc=ACC):
         """Back to rest: all start together, the shoulder gets back early, the elbow finishes the fold.
         The gripper closes in the last 40 percent, unless it is squeezing something."""
@@ -459,9 +483,11 @@ class RealArm:
         holding = self._gripper_holding()
         if not holding:
             items.append((6, CLOSED, 0.6 * dur, 0.4 * dur))
-        # the wrist always comes home level, whatever a pick turned it to
-        items.append((5, ROLL_REST if roll is None else roll, 0, dur))
+        if roll is not None:
+            items.append((5, roll, 0, dur))
         self._blend(items, settle=False, acc=acc)
+        if roll is None:
+            self._level_wrist()
         return holding
 
     def _go(self, i, goal, speed, acc=12):
@@ -723,7 +749,7 @@ class RealArm:
         detail = "at rest"
         if abs(self._rd(5, POSITION) - ROLL_REST) > 30:
             # a pick or a handover left the wrist turned: bring it level again
-            self._blend([(5, ROLL_REST, 0, 0.9)], settle=False)
+            self._level_wrist()
         if self._gripper_holding() and not at_rest:
             what = self._held["name"] if self._held else "bottle"
             self._put_down_here(1.0, self._held_tier)
@@ -793,7 +819,8 @@ class RealArm:
         """back_to_rest() from the script: one move, the gripper closes in the last 40 percent."""
         d = S.FETCH_REST_S * k
         self._fblend([(3, self.REST[3], 0, d), (2, self.REST[2], 0, (1 - LEAD) * d), (1, self.REST[1], 0, d),
-                      (4, self.REST[4], 0, d), (5, ROLL_REST, 0, d), (6, CLOSED, 0.6 * d, 0.4 * d)], settle=False, acc=acc)
+                      (4, self.REST[4], 0, d), (6, CLOSED, 0.6 * d, 0.4 * d)], settle=False, acc=acc)
+        self._level_wrist()
 
     def _put_down_here(self, k, tier=None):
         """The script's recovery when the turn cannot finish: hold, pull in to the tuck, stand the
