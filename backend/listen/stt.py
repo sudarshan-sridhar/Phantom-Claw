@@ -131,6 +131,38 @@ class ElevenSTT:
         return str(r.json().get("text") or "").strip()
 
 
+def wispr_key() -> str:
+    return (os.environ.get("WISPR_API_KEY") or "").strip()
+
+
+class WisprSTT:
+    """Wispr Flow speech to text (its REST endpoint with an API key), used the same way as
+    ElevenSTT: the cut utterance goes up as a 16 kHz WAV, the names and items as its dictionary."""
+
+    URL = "https://platform-api.wisprflow.ai/api/v1/dash/api"
+    model = "Wispr Flow"
+
+    def __init__(self, words=config.KEYTERMS, timeout: float = 10.0):
+        import httpx
+
+        self.words = list(words)
+        self.http = httpx.Client(timeout=httpx.Timeout(timeout, connect=3.0))
+
+    def __call__(self, audio: np.ndarray) -> str:
+        import base64
+
+        body = {
+            "audio": base64.b64encode(to_wav_bytes(audio)).decode("ascii"),
+            "language": ["en"],
+            "context": {"app": {"type": "ai"}, "dictionary_context": self.words},
+        }
+        # the key goes in a header, never in the address
+        r = self.http.post(self.URL, headers={"Authorization": f"Bearer {wispr_key()}"}, json=body)
+        if r.status_code != 200:
+            raise RuntimeError(f"Wispr Flow stt http {r.status_code}")
+        return str(r.json().get("text") or "").strip()
+
+
 class Transcriber:
     def __init__(
         self,
@@ -164,8 +196,14 @@ class Transcriber:
 
     def load(self) -> str:
         """Load the engine and the local model (used alone, or as the fallback), warm them up."""
-        has_key = bool(eleven_key()) or self.eleven is not None
         self.load_local()
+        # A Wispr Flow key wins: it is what the owner asked for. The local model still runs on the
+        # same clip and answers if Wispr Flow fails or is slow.
+        if self.eleven is None and wispr_key() and self.engine_req in ("auto", "wispr"):
+            self.eleven = WisprSTT()
+            self.engine = "eleven"
+            return f"Wispr Flow ({self.eleven_timeout:.1f} s limit), fallback {self.path}"
+        has_key = bool(eleven_key()) or self.eleven is not None
         self.engine = resolve_engine(self.engine_req, has_key, self.kind == "gpu" and is_big(self.model_name))
         if self.engine_req in ("eleven", "elevenlabs") and not has_key:
             print("[listen] LISTEN_ENGINE=eleven but ELEVENLABS_API_KEY is not set, using the local model", flush=True)
