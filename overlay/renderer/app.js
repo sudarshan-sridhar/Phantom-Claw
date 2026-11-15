@@ -217,7 +217,14 @@ const App = (() => {
   function setListen(awake) {
     const was = listenAwake;
     listenAwake = !!awake;
-    if (was && !listenAwake) activeUntil = Math.max(activeUntil, now() + 1.5);  // room for Merlin's goodbye line
+    if (was && !listenAwake) {
+      // Stop means gone: drop whatever was being said, put every pet back to idle, and leave.
+      speech.queue.length = 0;
+      if (speech.audio) { try { speech.audio.pause(); } catch (e) {} speech.audio = null; }
+      if (speech.current) speech.current.until = 0;
+      for (const p of pets) { p.state = 'idle'; p.forward = false; if (p.refreshClasses) p.refreshClasses(); }
+      activeUntil = 0;
+    }
     if (!was && listenAwake) for (const p of pets) p.perkAt = now();
   }
 
@@ -278,7 +285,8 @@ const App = (() => {
 
   function updatePresence(t) {
     if (busyNow()) activeUntil = Math.max(activeUntil, t + 1.0);
-    const want = alwaysShow() || listenAwake || t < activeUntil;
+    // asleep means off screen, unless the typing bar is open
+    const want = alwaysShow() || listenAwake || barOpen();
     if (want && (presence === 'hidden' || presence === 'leaving')) enterAll(t);
     else if (!want && (presence === 'shown' || presence === 'entering')) leaveAll(t);
     if (presence === 'entering' && t >= presenceAt) presence = 'shown';
