@@ -10,6 +10,9 @@ const path = require('path');
 const SHORTCUT = 'CommandOrControl+Shift+Space';
 // Backup for the listener's own Ctrl+Shift tap: toggles listening through the server.
 const LISTEN_SHORTCUT = 'CommandOrControl+Shift+L';
+// Stops the robot arm from anywhere. There is no Stop button on screen, so this
+// and the tray menu are the ways to stop it.
+const STOP_SHORTCUT = 'CommandOrControl+Shift+X';
 
 const argv = process.argv.slice(1);
 const flag = (name) => argv.includes('--' + name);
@@ -126,15 +129,32 @@ function quitApp() {
   app.quit();
 }
 
-function showMenu() {
-  const menu = Menu.buildFromTemplate([
+// Ask the server to stop the arm, then tell the page so the pets let go of it.
+// In demo mode there is no server, so only the page is told.
+async function stopArm() {
+  if (win && !win.isDestroyed()) win.webContents.send('stop-arm');
+  if (FLAGS.demo) { console.log('stop (demo, no server call)'); return; }
+  try {
+    const res = await fetch(FLAGS.server + '/api/stop', { method: 'POST' });
+    console.log('stop sent, server answered ' + res.status);
+  } catch (e) {
+    console.log('could not reach the server to stop the arm: ' + e.message);
+  }
+}
+
+function menuTemplate() {
+  return [
+    { label: 'Stop the arm (Ctrl+Shift+X)', click: stopArm },
+    { type: 'separator' },
     { label: 'Talk to the team (Ctrl+Shift+Space)', click: () => openInput(null) },
     { label: 'Start or stop listening (Ctrl+Shift)', click: () => win && win.webContents.send('toggle-listen') },
-    { label: 'Stop the arm', click: () => win && win.webContents.send('stop-arm') },
     { type: 'separator' },
     { label: 'Quit Phantom Claw', click: quitApp },
-  ]);
-  menu.popup({ window: win || undefined });
+  ];
+}
+
+function showMenu() {
+  Menu.buildFromTemplate(menuTemplate()).popup({ window: win || undefined });
 }
 
 function openInput(agent) {
@@ -188,8 +208,8 @@ function scheduleTests() {
   if (FLAGS.quitAfter > 0) setTimeout(quitApp, FLAGS.quitAfter);
   if (FLAGS.selftest) setTimeout(selfTest, 2500);
   if (flag('probe')) {
-    [2000, 4000, 8000, 16000, 22500].forEach((ms) => setTimeout(async () => {
-      const r = await win.webContents.executeJavaScript('JSON.stringify({toasts: document.getElementById("toasts").children.length, bubble: !document.querySelector(".bubble:not(.thinking)").classList.contains("hidden"), status: document.querySelector("#status span").textContent, statusShown: !document.getElementById("status").classList.contains("hidden"), err: window.__lastError || null})');
+    [2000, 4000, 8000, 12000, 16000, 20000, 22500].forEach((ms) => setTimeout(async () => {
+      const r = await win.webContents.executeJavaScript('JSON.stringify({bubble: !document.querySelector(".bubble").classList.contains("hidden"), furniture: window.__overlayTest.furniture(), states: window.__overlayTest.states(), err: window.__lastError || null})');
       console.log('PROBE ' + ms + ' ' + r);
     }, ms));
   }
@@ -220,6 +240,14 @@ async function selfTest() {
     const bar = await wc.executeJavaScript('window.__overlayTest.bar()');
     results.push('click avatar -> bar open=' + bar.open + ' agent=' + bar.agent + (bar.open && bar.agent === a.id ? ' PASS' : ' FAIL'));
     await capture(path.join(__dirname, 'test', 'out', 'selftest_bar.png'));
+    // Nothing on screen except pets, names, the scroll and the bar.
+    const extra = await wc.executeJavaScript('window.__overlayTest.furniture()');
+    results.push('other things on screen=' + JSON.stringify(extra) + (extra.length === 0 ? ' PASS' : ' FAIL'));
+    // The arm can still be stopped without a button on screen.
+    const stopKey = globalShortcut.isRegistered(STOP_SHORTCUT);
+    results.push('stop shortcut ' + STOP_SHORTCUT + ' registered=' + stopKey + (stopKey ? ' PASS' : ' FAIL'));
+    const hasStop = menuTemplate().some((m) => /stop the arm/i.test(m.label || ''));
+    results.push('tray menu has Stop=' + hasStop + (hasStop ? ' PASS' : ' FAIL'));
     const fps = await wc.executeJavaScript('window.__overlayTest.fps()');
     results.push('render fps=' + fps.toFixed(1));
   } catch (e) {
@@ -244,10 +272,13 @@ app.whenReady().then(() => {
   if (!globalShortcut.register(LISTEN_SHORTCUT, () => win && win.webContents.send('toggle-listen'))) {
     console.log('could not register ' + LISTEN_SHORTCUT + ' (another app may own it)');
   }
+  if (!globalShortcut.register(STOP_SHORTCUT, stopArm)) {
+    console.log('could not register ' + STOP_SHORTCUT + ' (another app may own it)');
+  }
 
   try {
     tray = new Tray(makeTrayIcon());
-    tray.setToolTip('Phantom Claw');
+    tray.setToolTip('Phantom Claw (right-click to stop the arm)');
     tray.on('click', () => openInput(null));
     tray.on('right-click', showMenu);
   } catch (e) {

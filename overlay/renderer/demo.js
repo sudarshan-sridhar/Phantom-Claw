@@ -20,13 +20,15 @@ const Demo = (() => {
     [9.5, states('thinking', ['ban'])],
     [2.0, [states('speaking', ['ban'])[0], { type: 'say', agent: 'ban', text: 'Easy. Watch this, and I will throw in a twirl for free.', audio_url: null }]],
     [3.6, states('has_arm', ['ban'])],
-    ...armRun('ban', 'grip_bottle', [[0.4, 'start'], [1.4, 'at_target'], [1.2, 'gripped'], [1.0, 'lifted'], [3.0, 'put_back'], [1.4, 'returning'], [1.3, 'done']]),
+    ...armRun('ban', 'grip_bottle', [[0.4, 'start'], [1.4, 'at_target'], [1.2, 'gripped']]),
+    // King gets asked something while Ban is still holding the arm.
+    [0.0, [{ type: 'request', text: 'King, set a tea timer and add tea to my list', named_agent: 'king' }, states('listening', ['king'])[0]]],
+    ...armRun('ban', 'grip_bottle', [[1.0, 'lifted']]),
+    [0.0, states('thinking', ['king'])],
+    ...armRun('ban', 'grip_bottle', [[3.0, 'put_back'], [1.4, 'returning'], [1.3, 'done']]),
     [0.6, [states('idle', ['ban'])[0], { type: 'note', agent: 'ban', text: 'bottle lifted and put back', kind: 'note' }]],
 
-    [3.0, { type: 'request', text: 'King, set a tea timer and add tea to my list', named_agent: 'king' }],
-    [0.1, states('listening', ['king'])],
-    [1.6, states('thinking', ['king'])],
-    [1.8, [states('speaking', ['king'])[0], { type: 'say', agent: 'king', text: 'Fine. Five minutes. Wake me after.', audio_url: null }]],
+    [1.0, [states('speaking', ['king'])[0], { type: 'say', agent: 'king', text: 'Fine. Five minutes. Wake me after.', audio_url: null }]],
     [3.2, [states('idle', ['king'])[0], { type: 'note', agent: 'king', text: 'make tea', kind: 'todo' }]],
     [2.0, { type: 'timer_done', agent: 'king', label: 'tea' }],
 

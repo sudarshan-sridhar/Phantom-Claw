@@ -10,22 +10,11 @@
 <body>
   <div id="world"></div>
 
-  <div id="status" class="plaque hidden"><img src="../assets/hd/crystal-ball.png" alt=""><span></span></div>
-  <div id="toasts"></div>
-  <div id="link" class="plaque"><i></i><span>linking</span></div>
-  <div id="ear" class="plaque hidden"><i></i><span>asleep</span></div>
-
+  <!-- Only shows when summoned. Enter sends, Esc closes. -->
   <div id="bar" class="interactive hidden" role="dialog" aria-label="Ask the team">
-    <img id="bar-wand" src="../assets/hd/wand.png" alt="">
-    <span id="bar-who">Ask the team</span>
-    <input id="bar-text" type="text" maxlength="300" autocomplete="off" spellcheck="false" placeholder="What should be done?">
-    <button id="bar-send" title="Send (Enter)">Send</button>
-    <button id="bar-talk" title="Hold to talk">Hold to talk</button>
-    <button id="bar-stop" class="stop" title="Stop the arm">Stop</button>
-    <button id="bar-close" title="Close (Esc)">close</button>
+    <input id="bar-text" type="text" maxlength="300" autocomplete="off" spellcheck="false" placeholder="ask the team">
+    <button id="bar-talk" title="Hold to talk">hold to talk</button>
   </div>
-
-  <button id="stop-pill" class="interactive hidden" title="Stop the arm">Stop the arm</button>
 
   <script src="sprites.js"></script>
   <script src="app.js"></script>

@@ -1,4 +1,6 @@
-/* Chrome follows the Hack Dearborn: Conjure Reality brand.
+/* The only things on screen are the six pets, their names as plain lettering,
+   and the scroll with the line someone is saying. The input bar shows only when summoned.
+   Look follows the Hack Dearborn: Conjure Reality brand.
    Palette: #4b6359 gray turquoise, #d9c5a3 beige, #b0afc8 light purple, black, white,
    plus darker and lighter steps of those. Flat fills, hard ink edges, no gradients.
    Everything that moves is moved with transforms only, so the compositor does the work. */
@@ -16,6 +18,9 @@
   --purple-dark: #8f8eab;
   --ink: #000000;
   --paper: #ffffff;
+  /* A one pixel black outline drawn with hard text shadows, so lettering reads on any wallpaper. */
+  --outline: 1px 0 0 #000, -1px 0 0 #000, 0 1px 0 #000, 0 -1px 0 #000,
+             1px 1px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000;
 }
 
 html, body {
@@ -59,10 +64,10 @@ html, body {
   top: 100%;
   left: 50%;
   transform: translateX(-50%);
-  margin-top: 4px;
-  padding: 0 8px 1px;
-  border: 1px solid var(--ink);
-  font: 15px/18px 'HD Fell', serif;
+  margin-top: 3px;
+  font: 14px/17px 'HD Fell', serif;
+  letter-spacing: 0.3px;
+  text-shadow: var(--outline);
   white-space: nowrap;
 }
 
@@ -72,7 +77,7 @@ html, body {
 }
 .pet .sparkle.b { width: 22px; }
 
-.pet canvas.zz {
+.pet canvas.zz, .pet canvas.dots {
   position: absolute;
   image-rendering: pixelated;
 }
@@ -105,137 +110,53 @@ html, body {
 }
 .bubble.below .tail { top: auto; bottom: calc(100% + 9px); border-top: 0; border-bottom: 10px solid var(--ink); }
 .bubble.side .tail { display: none; }
-.bubble.thinking { padding: 0 2px; font-size: 22px; line-height: 16px; letter-spacing: 3px; }
-
-/* ---------- plaques: status, notes, link mark ---------- */
-.plaque {
-  position: fixed;
-  border: 2px solid var(--ink);
-  font: 15px/20px 'HD Fell', serif;
-  pointer-events: none;
-}
-#status {
-  top: 12px;
-  left: 12px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 12px 3px 4px;
-  background: var(--teal);
-  color: var(--beige-light);
-  outline: 1px solid var(--beige);
-  outline-offset: -5px;
-  font-size: 16px;
-}
-#status img { width: 32px; height: 32px; }
-
-#toasts {
-  position: fixed;
-  top: 12px;
-  right: 12px;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 8px;
-  pointer-events: none;
-}
-#toasts .plaque { position: static; padding: 3px 10px; background: var(--beige); color: var(--ink); max-width: 460px; }
-#toasts .plaque.request { background: var(--purple); font: 17px/21px 'HD Obra', serif; }
-#toasts .plaque.error { background: var(--ink); color: var(--paper); }
-
-#link {
-  left: 10px;
-  bottom: 8px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 8px 1px 6px;
-  background: var(--teal);
-  color: var(--beige-light);
-  font-size: 13px;
-  line-height: 17px;
-  border-width: 1px;
-}
-#link i { width: 6px; height: 6px; border: 1px solid var(--beige); }
-#link.live i { background: var(--beige); }
-
-/* Listening mark, sits just right of the link mark. Beige when listening. */
-#ear {
-  left: 90px;
-  bottom: 8px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 8px 1px 6px;
-  background: var(--teal);
-  color: var(--beige-light);
-  font-size: 13px;
-  line-height: 17px;
-  border-width: 1px;
-}
-#ear i { width: 6px; height: 6px; border: 1px solid var(--beige); }
-#ear.on { background: var(--beige); color: var(--ink); }
-#ear.on i { background: var(--ink); border-color: var(--ink); }
 
 /* Asleep: the pets are off screen and hidden. */
 #world.away { visibility: hidden; }
-.bubble.heard { font-size: 16px; line-height: 19px; }
 
 /* Screenshot runs only (see app.js). */
 .keepalive { position: fixed; left: 0; top: 0; width: 2px; height: 2px; animation: keepalive 1s linear infinite; }
 @keyframes keepalive { from { opacity: 0.01; } to { opacity: 0.02; } }
 
-/* ---------- input bar ---------- */
+/* ---------- input bar: one line of text on a thin underline, no box ---------- */
 #bar {
   position: fixed;
   top: 10px;
   left: 0;
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 10px 7px 8px;
-  background: var(--teal);
-  border: 2px solid var(--ink);
-  outline: 1px solid var(--beige);
-  outline-offset: -5px;
-  color: var(--beige-light);
-  font: 15px 'HD Fell', serif;
+  align-items: flex-end;
+  gap: 14px;
+  padding: 4px 2px;
+  background: transparent;
 }
-#bar-wand { width: 26px; height: 28px; margin: -4px 0 -4px 2px; }
-#bar-who { font: 20px 'HD Aseina', serif; color: var(--beige); white-space: nowrap; padding: 0 4px; letter-spacing: 0.5px; }
 #bar input {
-  width: 320px;
-  padding: 5px 8px;
-  border: 2px solid var(--ink);
-  background: var(--beige-light);
-  color: var(--ink);
-  font: 17px 'HD Obra', serif;
+  width: 340px;
+  padding: 2px 2px 3px;
+  border: 0;
+  border-bottom: 2px solid var(--beige);
+  box-shadow: 0 1px 0 var(--ink);
+  border-radius: 0;
+  background: transparent;
+  color: var(--beige-light);
+  caret-color: var(--beige-light);
+  font: 19px/24px 'HD Obra', serif;
+  text-shadow: var(--outline);
   outline: none;
 }
-#bar input::placeholder { color: #7a6f5c; }
-#bar input:focus { background: var(--paper); }
+#bar input::placeholder { color: var(--purple); text-shadow: var(--outline); }
 
-#bar button, #stop-pill {
-  padding: 4px 10px 5px;
-  border: 2px solid var(--ink);
+/* Hold to talk is plain lettering too. */
+#bar-talk {
+  padding: 0 0 4px;
+  border: 0;
   border-radius: 0;
-  background: var(--purple);
-  color: var(--ink);
-  font: 15px 'HD Fell', serif;
+  background: transparent;
+  color: var(--purple);
+  font: 15px/18px 'HD Fell', serif;
+  text-shadow: var(--outline);
+  white-space: nowrap;
   cursor: pointer;
 }
-#bar button:hover { background: #c4c3d8; }
-#bar button:active, #stop-pill:active { background: var(--purple-dark); }
-#bar-talk.recording { background: var(--beige); }
-#bar-talk.busy, #bar-send.busy { color: #4d4c63; }
-
-#bar button.stop, #stop-pill {
-  background: var(--ink);
-  color: var(--paper);
-  outline: 1px solid var(--paper);
-  outline-offset: -4px;
-}
-#bar button.stop:hover, #stop-pill:hover { background: #262626; }
-#bar-close { background: transparent !important; border-color: transparent !important; color: var(--beige) !important; }
-
-#stop-pill { position: fixed; left: 12px; top: 62px; font-size: 16px; padding: 7px 14px 8px; }
+#bar-talk:hover { color: var(--beige-light); }
+#bar-talk.recording { color: var(--beige); }
+#bar-talk.busy { color: var(--purple-dark); }

@@ -1,6 +1,6 @@
 # Phantom Claw overlay
 
-Six pixel pets live across the whole primary screen: Escanor, Elizabeth, Ban, King, Gowther and Merlin. Each has a home in a different part of the screen and roams from it: walking along the bottom edge, perching on the top and side edges, drifting or leaping between spots, resting, then moving on. They react live to the Phantom Claw server. Tags, speech, notes and the input bar use the Hack Dearborn: Conjure Reality look (brand palette, fonts, and the artist's scroll, crystal ball, sparkle and wand).
+Six pixel pets live across the whole primary screen: Escanor, Elizabeth, Ban, King, Gowther and Merlin. Each has a home in a different part of the screen and roams from it: walking along the bottom edge, perching on the top and side edges, drifting or leaping between spots, resting, then moving on. They react live to the Phantom Claw server. The screen holds only the pets, their names in plain lettering, and the artist's scroll with whatever line a pet is saying. There are no panels, notes, status marks or buttons on screen. Everything follows the Hack Dearborn: Conjure Reality look (brand palette, fonts, the scroll and the sparkle).
 
 ## Install and run
 
@@ -17,8 +17,8 @@ Other scripts:
 
 ```
 npm run snap       # re-snap the saved raw sprites to the pixel grid, no API calls
-npm run shot       # demo plus four screenshots in test/out/, then quits
-npm run selftest   # checks click-through and the click-to-ask bar, prints SELFTEST lines, then quits
+npm run shot       # demo plus three screenshots in test/out/, then quits
+npm run selftest   # checks click-through, the click-to-ask bar, that nothing else is on screen, the stop shortcut and the tray Stop item
 ```
 
 Add `--fallback` (for example `npx electron . --demo --fallback`) to see the code-drawn sprites instead of the generated ones.
@@ -26,12 +26,12 @@ Add `--fallback` (for example `npx electron . --demo --fallback`) to see the cod
 ## Using it
 
 - The window covers the screen's work area (everything except the taskbar), is transparent and stays on top. Clicks pass through everywhere except on a pet or on the input bar.
-- Voice: with the listener running (`python -m backend.listen`), the pets stay off screen while it is asleep. "Phantom Claw, start", a quick Ctrl+Shift tap, or Ctrl+Shift+L brings them in; "Phantom Claw, stop" or the same keys send them away. The small mark next to the link mark reads asleep or listening. Add `--show` (`npm start -- --show`) to keep them on screen all the time.
+- Voice: with the listener running (`python -m backend.listen`), the pets stay off screen while it is asleep. "Phantom Claw, start", a quick Ctrl+Shift tap, or Ctrl+Shift+L brings them in; "Phantom Claw, stop" or the same keys send them away. Add `--show` (`npm start -- --show`) to keep them on screen all the time.
 - Click a pet to ask it directly. Press Ctrl+Shift+Space (or click the tray icon) to ask the whole team and let Merlin choose.
-- The bar has a text field (Enter sends), Hold to talk (records the microphone, sends it to `/api/stt` as the form field `file`, then submits the words) and Stop (calls `/api/stop`). Esc closes it.
-- While someone has the arm, a Stop the arm button also shows at the top left under the arm status.
+- The bar is one line of text on a thin underline (Enter sends and closes it) and a hold to talk control (records the microphone, sends it to `/api/stt` as the form field `file`, then submits the words). Esc or clicking into another window closes it.
+- Stopping the arm: press Ctrl+Shift+X from anywhere, or right-click the tray icon and pick Stop the arm. Both call `POST /api/stop`. There is no Stop button on screen.
 - Drag a pet to move it. Walkers drop to the bottom edge; Elizabeth and Merlin stay where you leave them. Right-click a pet, or the tray icon, for the menu with Quit.
-- The small mark at the bottom left reads linked, linking, offline or demo. The pets keep wandering when the server is down, and the link retries every few seconds.
+- The pets keep wandering when the server is down, and the link retries every few seconds. Link problems and server errors go to the developer console only.
 
 ## Habits
 
@@ -44,19 +44,22 @@ Add `--fallback` (for example `npx electron . --demo --fallback`) to see the cod
 | Gowther | centre, low | walks in straight lines, then stands still |
 | Merlin | top right | floats in the upper part of the screen |
 
-Pets keep a minimum distance from each other. When one thinks, speaks or takes the arm, it comes forward to a clear spot with room for its scroll, and the scroll is kept fully on screen and clear of other bubbles. A pet holding the arm grows by one pixel step.
+Pets keep a minimum distance from each other. When one thinks, speaks or takes the arm, it comes forward to a clear spot with room for its scroll. Only one scroll is on screen at a time, kept fully on screen, and it goes away when the line ends. A pet holding the arm grows by one pixel step.
 
 ## What the server events do
 
+Only what a pet says is ever written on screen. Every other event shows in how the pets move, or not at all.
+
 | event | on screen |
 |---|---|
-| `request` | a small purple note at top right with the request |
 | `merlin` | the argument lines, then Merlin's line, each on a scroll over the speaker, in order |
-| `agent_state` | idle roams, listening perks up with a sparkle, thinking shows a small scroll with dots, speaking bounces, has_arm comes forward and grows |
 | `say` | the line on a scroll over the speaker, and its `audio_url` plays |
-| `arm` | top left status with the crystal ball, for example "Ban has the arm: lifting" |
-| `note`, `timer_done` | a short beige note at top right |
-| `error` | a short black note at top right |
+| `agent_state` | idle roams, listening perks up with a sparkle, thinking shows a small pixel "..." over the head, speaking bounces, has_arm comes forward, sparkles and grows |
+| `hear` | the named pet hops, perks up and comes forward (the owner's words are not shown) |
+| `arm` | the pet holding the arm sparkles and grows; it lets go when the run ends |
+| `request`, `timer_done` | the named pet gives a small hop |
+| `listen` | the pets come in or leave |
+| `note`, `error` | nothing on screen |
 
 Speech lines play one at a time in arrival order. Audio URLs are relative to the server (`/audio/...`).
 
@@ -72,7 +75,7 @@ If a sprite file is missing, the app draws that character in code instead.
 
 ## Files
 
-- `main.js` window, click-through, global shortcut, tray, screenshot and self test flags
+- `main.js` window, click-through, global shortcuts (including Ctrl+Shift+X to stop the arm), tray menu, screenshot and self test flags
 - `preload.js` the small bridge to the page
 - `renderer/app.js` pets, habits, movement, bubbles, events, input bar
 - `renderer/sprites.js` sprite loading and the code-drawn fallbacks

@@ -8,21 +8,17 @@
 // ticks per second.
 'use strict';
 
+// ink is the colour of the name lettering under each pet. King and Merlin use
+// their second colour because their first one is too dark to read on a dark desktop.
 const CAST = [
-  { id: 'escanor',   name: 'Escanor',   tag: '#F5A623', tagInk: '#000000', habit: 'strut' },
-  { id: 'elizabeth', name: 'Elizabeth', tag: '#E8F1F8', tagInk: '#000000', habit: 'drift' },
-  { id: 'ban',       name: 'Ban',       tag: '#C1121F', tagInk: '#ffffff', habit: 'dart' },
-  { id: 'king',      name: 'King',      tag: '#2D6A4F', tagInk: '#F4A261', habit: 'sleep' },
-  { id: 'gowther',   name: 'Gowther',   tag: '#D63384', tagInk: '#ffffff', habit: 'line' },
-  { id: 'merlin',    name: 'Merlin',    tag: '#3C096C', tagInk: '#F5C400', habit: 'float' },
+  { id: 'escanor',   name: 'Escanor',   ink: '#F5A623', habit: 'strut' },
+  { id: 'elizabeth', name: 'Elizabeth', ink: '#E8F1F8', habit: 'drift' },
+  { id: 'ban',       name: 'Ban',       ink: '#E0323C', habit: 'dart' },
+  { id: 'king',      name: 'King',      ink: '#F4A261', habit: 'sleep' },
+  { id: 'gowther',   name: 'Gowther',   ink: '#E05A9C', habit: 'line' },
+  { id: 'merlin',    name: 'Merlin',    ink: '#F5C400', habit: 'float' },
 ];
 const BY_ID = Object.fromEntries(CAST.map((c) => [c.id, c]));
-
-const PHASE_WORDS = {
-  start: 'starting', at_target: 'at the bottle', gripped: 'gripped it', lifted: 'lifting',
-  put_back: 'putting it back', missed: 'missed', returning: 'returning', done: 'done', error: 'stopped on an error',
-};
-const SKILL_WORDS = { grip_bottle: 'the bottle', point: 'a point', half_reach: 'a half reach', wave: 'a wave', rest: 'rest' };
 
 window.addEventListener('error', (e) => { window.__lastError = String(e.message); });
 window.addEventListener('unhandledrejection', (e) => { window.__lastError = String(e.reason && e.reason.stack || e.reason); });
@@ -32,7 +28,6 @@ const App = (() => {
   let W = 0, H = 0, dpr = 1;            // window size in CSS pixels
   let flags = { demo: false, server: 'http://127.0.0.1:8765' };
   let pets = [];
-  let armStatus = null;
   // Listening: asleep means the pets are off screen until "Phantom Claw, start" or the shortcut.
   let listenAwake = false;
   let presence = 'shown';               // shown, entering, leaving, hidden
@@ -207,85 +202,30 @@ const App = (() => {
     return { x: chosen.x, y: chosen.y, w: bw, h: bh };
   }
 
+  // Only the speaking pet has a scroll, so there is never more than one on screen.
   function layoutBubbles() {
-    const taken = [];
     if (speech.current && speechEl._agent) {
       const p = find(speechEl._agent);
-      if (p) taken.push(placeBubble(speechEl, p, taken));
-    }
-    for (const p of pets) {
-      if (p.heard && now() >= p.heard.until) p.heard = null;
-      const heard = p.heard;
-      const thinking = p.state === 'thinking';
-      p.thinkEl.classList.toggle('hidden', !(thinking || heard));
-      // What the listener heard stays in the pet's bubble until its reply comes.
-      p.thinkEl.classList.toggle('thinking', !heard);
-      p.thinkEl.classList.toggle('heard', !!heard);
-      if (heard) {
-        const txt = '\u201c' + heard.text + '\u201d';
-        if (p.thinkEl._dots !== txt) { p.thinkEl.querySelector('.text').textContent = txt; p.thinkEl._dots = txt; p.thinkEl._sig = ''; }
-        taken.push(placeBubble(p.thinkEl, p, taken));
-      } else if (thinking) {
-        const n = 1 + (Math.floor(now() * 3) % 3);
-        const dots = '.'.repeat(n).padEnd(3, ' ');
-        if (p.thinkEl._dots !== dots) { p.thinkEl.querySelector('.text').textContent = dots; p.thinkEl._dots = dots; }
-        taken.push(placeBubble(p.thinkEl, p, taken));
-      }
+      if (p) placeBubble(speechEl, p, []);
     }
   }
 
-  // ---------- notes and status ----------
-  const toastsEl = document.getElementById('toasts');
-  function toast(text, kind) {
-    const el = document.createElement('div');
-    el.className = 'plaque ' + (kind || '');
-    el.textContent = text;
-    toastsEl.appendChild(el);
-    while (toastsEl.children.length > 3) toastsEl.firstChild.remove();
-    setTimeout(() => el.remove(), kind === 'error' ? 7000 : 5000);
-  }
+  // Nothing is drawn for notes, timers, errors or the link state any more.
+  // Problems still go to the console so they can be found when debugging.
+  function report(text) { console.warn('[phantom claw] ' + text); }
 
-  const statusEl = document.getElementById('status');
-  const stopPill = document.getElementById('stop-pill');
-  function renderStatus(t) {
-    if (armStatus && t - armStatus.at > (['done', 'missed', 'error'].includes(armStatus.phase) ? 4 : 60)) armStatus = null;
-    const active = !!armStatus || pets.some((p) => p.state === 'has_arm');
-    stopPill.classList.toggle('hidden', !active);
-    statusEl.classList.toggle('hidden', !armStatus);
-    if (!armStatus) return;
-    const def = BY_ID[armStatus.agent];
-    const word = armStatus.phase === 'start' ? 'starting ' + (SKILL_WORDS[armStatus.skill] || armStatus.skill || '') : (PHASE_WORDS[armStatus.phase] || armStatus.phase);
-    const text = (def ? def.name : armStatus.agent) + ' has the arm: ' + word;
-    const span = statusEl.querySelector('span');
-    if (span.textContent !== text) span.textContent = text;
-  }
-
-  const linkEl = document.getElementById('link');
+  let linkState = 'connecting';
   function setLink(state) {
-    linkEl.className = 'plaque ' + state;
-    linkEl.querySelector('span').textContent = { live: 'linked', offline: 'offline', connecting: 'linking', demo: 'demo' }[state] || state;
+    linkState = state;
     if (state === 'offline') setListen(false);   // no server, nobody is listening
-    renderEar();
   }
 
-  // ---------- listening: the small mark next to the link mark, and the pets coming and going ----------
-  const earEl = document.getElementById('ear');
-  function renderEar() {
-    if (!earEl) return;
-    earEl.classList.toggle('hidden', !!flags.demo);
-    earEl.classList.toggle('on', listenAwake);
-    const text = listenAwake ? 'listening' : 'asleep';
-    const span = earEl.querySelector('span');
-    if (span.textContent !== text) span.textContent = text;
-    earEl.style.left = (linkEl.offsetLeft + linkEl.offsetWidth + 6) + 'px';
-  }
-
+  // ---------- listening: the pets coming and going ----------
   function setListen(awake) {
     const was = listenAwake;
     listenAwake = !!awake;
     if (was && !listenAwake) activeUntil = Math.max(activeUntil, now() + 1.5);  // room for Merlin's goodbye line
     if (!was && listenAwake) for (const p of pets) p.perkAt = now();
-    renderEar();
   }
 
   async function toggleListen() {
@@ -297,13 +237,13 @@ const App = (() => {
         body: JSON.stringify({ awake: !listenAwake, source: 'overlay' }),
       });
     } catch (e) {
-      toast('The server is not reachable', 'error');
+      report('the server is not reachable');
     }
   }
 
   const alwaysShow = () => !!(flags.demo || flags.show);
   const barOpen = () => !bar.classList.contains('hidden');
-  const busyNow = () => barOpen() || !!speech.current || speech.queue.length > 0 || pets.some((p) => p.state !== 'idle' || p.heard);
+  const busyNow = () => barOpen() || !!speech.current || speech.queue.length > 0 || pets.some((p) => p.state !== 'idle');
   const floats = (p) => p.def.habit === 'float' || p.def.habit === 'drift';
 
   // Walkers come in from the nearest side, Elizabeth and Merlin drift down from the top.
@@ -391,15 +331,15 @@ const App = (() => {
       const tag = document.createElement('div');
       tag.className = 'tag';
       tag.textContent = this.def.name;
-      tag.style.background = this.def.tag;
-      tag.style.color = this.def.tagInk;
+      tag.style.color = this.def.ink;
       el.appendChild(tag);
       this.sparkA = sparkleImg('a'); this.sparkB = sparkleImg('b');
       el.append(this.sparkA, this.sparkB);
       this.zA = zCanvas('a'); this.zB = zCanvas('b');
       el.append(this.zA, this.zB);
+      this.dots = dotsCanvas();
+      el.appendChild(this.dots);
       world.appendChild(el);
-      this.thinkEl = makeBubble('thinking');
       this.render(false);
     }
 
@@ -434,6 +374,8 @@ const App = (() => {
       this.sparkB.style.left = (this.w + 2) + 'px'; this.sparkB.style.top = (this.h * 0.35) + 'px';
       this.zA.style.left = (this.w * 0.7) + 'px'; this.zA.style.top = '-6px';
       this.zB.style.left = (this.w * 0.8) + 'px'; this.zB.style.top = '-16px';
+      this.dots.style.left = Math.round(this.w / 2 - this.dots.cssW / 2) + 'px';
+      this.dots.style.top = (-this.dots.cssH - 8) + 'px';
       this.lastSig = '';
     }
 
@@ -470,6 +412,7 @@ const App = (() => {
       const zz = this.sleeping && !this.move && !this.active();
       this.zA.classList.toggle('hidden', !zz);
       this.zB.classList.toggle('hidden', !zz);
+      this.dots.classList.toggle('hidden', this.state !== 'thinking');
     }
 
     // Come forward to a clear spot with room for a bubble.
@@ -581,13 +524,16 @@ const App = (() => {
       if (this.def.habit === 'drift') body -= [0, 1, 2, 1][Math.floor((t + this.seed) / 0.4) % 4];
       if (talking) body -= (Math.floor(t / 0.16) % 2) * 2;
       if (this.state === 'listening') body -= 1;
+      // A quick hop when it hears its name or the team wakes up.
+      if (t - this.perkAt < 0.35) body -= 3;
       const period = this.def.habit === 'sleep' ? 2.6 : 1.4;
       const breath = (this.state === 'idle' && !talking && !this.move && ((t + this.seed) % period) < period / 2) ? 1 : 0;
       const sparkOn = this.state === 'has_arm' || this.state === 'listening';
       const sk = sparkOn ? Math.floor(t / 0.4) % 3 : -1;
       const zOn = this.sleeping && !this.move && !this.active();
       const zk = zOn ? Math.floor(((t * 0.42) % 1) * 8) : -1;
-      const sig = body + '|' + breath + '|' + sk + '|' + zk;
+      const dk = this.state === 'thinking' ? 1 + Math.floor(t * 2.5) % 3 : -1;
+      const sig = body + '|' + breath + '|' + sk + '|' + zk + '|' + dk;
       if (sig === this.animSig) return;
       this.animSig = sig;
       this.bodyEl.style.transform = body ? 'translateY(' + body * u + 'px)' : '';
@@ -603,6 +549,7 @@ const App = (() => {
         this.zB.style.transform = 'translate(' + zb * 2 + 'px,' + (-zb * 5) + 'px)';
         this.zB.style.opacity = String(1 - zb / 8);
       }
+      if (dk >= 0) this.dots.draw(dk);
     }
   }
 
@@ -631,6 +578,32 @@ const App = (() => {
     return cv;
   }
 
+  // A pixel "..." over a thinking pet: beige dots with their own black outline,
+  // a clear gap between them and nothing behind them, so it never reads as a box.
+  // draw(k) shows the first k dots (1 to 3), so they appear one by one and start over.
+  function dotsCanvas() {
+    const s = Math.max(4, Math.round(4 * dpr));
+    const cols = 14, rows = 4;   // three outlined 2x2 dots, one empty pixel between outlines
+    const cv = document.createElement('canvas');
+    cv.width = cols * s; cv.height = rows * s;
+    cv.cssW = cols * s / dpr; cv.cssH = rows * s / dpr;
+    cv.style.width = cv.cssW + 'px'; cv.style.height = cv.cssH + 'px';
+    cv.className = 'dots hidden';
+    const g = cv.getContext('2d');
+    cv.draw = (k) => {
+      g.clearRect(0, 0, cv.width, cv.height);
+      for (let i = 0; i < k; i++) {
+        const x0 = i * 5;
+        g.fillStyle = '#000';
+        g.fillRect(x0 * s, 0, 4 * s, 4 * s);
+        g.fillStyle = '#efe4d0';
+        g.fillRect((x0 + 1) * s, s, 2 * s, 2 * s);
+      }
+    };
+    cv.draw(3);
+    return cv;
+  }
+
   function find(id) { return pets.find((p) => p.id === id); }
 
   // Keep pets from settling on top of each other.
@@ -656,9 +629,8 @@ const App = (() => {
     for (const p of pets) busy = p.update(t, dt) || busy;
     for (const p of pets) { p.place(); p.animate(t); }
     layoutBubbles();
-    renderStatus(t);
     if (presence === 'shown' && t - lastSpread > 1.5) { spreadOut(t); lastSpread = t; }
-    busy = busy || pets.some((p) => p.dragging || p.fall || p.speaking() || p.state === 'speaking');
+    busy = busy || pets.some((p) => p.dragging || p.fall || p.speaking() || p.state === 'speaking' || t - p.perkAt < 0.4);
     ticks++;
     const ms = performance.now();
     if (ms - tickStart > 1000) { tickRate = ticks * 1000 / (ms - tickStart); ticks = 0; tickStart = ms; }
@@ -677,34 +649,28 @@ const App = (() => {
   // ---------- events from the server (or the demo) ----------
   function handleEvent(ev) {
     if (!ev || typeof ev !== 'object') return;
-    const nameOf = (id) => (BY_ID[id] ? BY_ID[id].name : id || 'Someone');
+    // Only what a pet says is ever written on screen. Everything else shows in how the pets move.
     switch (ev.type) {
       case 'request':
-        toast('Asked: ' + String(ev.text || '').slice(0, 80), 'request');
         if (ev.named_agent && find(ev.named_agent)) find(ev.named_agent).perkAt = now();
         break;
       case 'merlin':
-        if (find('merlin')) find('merlin').heard = null;
         (ev.argued || []).forEach((a) => enqueueLine(a.agent, a.say, a.audio_url));
         if (ev.say) enqueueLine('merlin', ev.say, ev.audio_url);
         break;
       case 'agent_state': {
         const p = find(ev.agent);
-        if (p) {
-          if (ev.state === 'idle') p.heard = null;
-          p.setState(ev.state);
-        }
+        if (p) p.setState(ev.state);
         break;
       }
       case 'say':
-        if (find(ev.agent)) find(ev.agent).heard = null;
         enqueueLine(ev.agent, ev.text, ev.audio_url);
         break;
       case 'hear': {
         // The listener caught a name: perk up now, before the LLM has even started.
+        // The owner's own words are not shown.
         const p = find(ev.agent);
         if (p) {
-          p.heard = { text: String(ev.text || '').slice(0, 140), until: now() + 25 };
           p.wake();
           p.perkAt = now();
           if (p.state === 'idle') p.setState('listening'); else p.refreshClasses();
@@ -715,18 +681,21 @@ const App = (() => {
       case 'listen':
         if (typeof ev.awake === 'boolean') setListen(ev.awake);
         break;
-      case 'arm':
-        armStatus = { agent: ev.agent, skill: ev.skill, phase: ev.phase, at: now() };
+      case 'arm': {
+        // The arm shows on the pet itself: the sparkle and the slight grow.
+        const p = find(ev.agent);
+        if (!p) break;
+        if (!['done', 'missed', 'error'].includes(ev.phase)) { p.setState('has_arm'); p.armEnd = null; break; }
+        // The server normally sends idle next. If it does not, let go after a few seconds.
+        const mark = p.armEnd = {};
+        setTimeout(() => { if (p.armEnd === mark && p.state === 'has_arm') p.setState('idle'); }, 4000);
         break;
-      case 'note':
-        toast(nameOf(ev.agent) + (ev.kind === 'todo' ? ' added a to-do: ' : ' noted: ') + String(ev.text || '').slice(0, 80));
-        break;
+      }
       case 'timer_done':
-        toast('Timer done: ' + (ev.label || 'timer') + ' (' + nameOf(ev.agent) + ')');
+        if (find(ev.agent)) find(ev.agent).perkAt = now();
         break;
       case 'error':
-        toast('Trouble in ' + (ev.where || 'the server') + ': ' + String(ev.message || '').slice(0, 90), 'error');
-        if (ev.where === 'pipeline') pets.forEach((p) => { p.heard = null; });
+        report('trouble in ' + (ev.where || 'the server') + ': ' + String(ev.message || ''));
         break;
       default:
         break;
@@ -803,14 +772,14 @@ const App = (() => {
 
   // ---------- input bar ----------
   const barText = document.getElementById('bar-text');
-  const barWho = document.getElementById('bar-who');
   const barTalk = document.getElementById('bar-talk');
-  const barSend = document.getElementById('bar-send');
   let barAgent = null;
+  let barOpenedAt = 0;
 
   function openBar(agent) {
     barAgent = agent && BY_ID[agent] ? agent : null;
-    barWho.textContent = barAgent ? 'Ask ' + BY_ID[barAgent].name : 'Ask the team';
+    barText.placeholder = barAgent ? 'ask ' + BY_ID[barAgent].name : 'ask the team';
+    barOpenedAt = now();
     bar.classList.remove('hidden');
     const bw = bar.offsetWidth, bh = bar.offsetHeight;
     const p = barAgent && find(barAgent);
@@ -845,35 +814,26 @@ const App = (() => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, agent: agent || null }),
       });
-      if (!res.ok) toast('The server refused that request (' + res.status + ')', 'error');
+      if (!res.ok) report('the server refused that request (' + res.status + ')');
     } catch (e) {
-      toast('The server is not reachable', 'error');
+      report('the server is not reachable');
     }
   }
 
-  async function stopArm() {
-    if (flags.demo) {
-      armStatus = armStatus && { ...armStatus, phase: 'done', at: now() };
-      pets.forEach((p) => { if (p.state === 'has_arm') p.setState('idle'); });
-      toast('Arm stopped');
-      return;
-    }
-    try {
-      await fetch(flags.server + '/api/stop', { method: 'POST' });
-      toast('Arm stopped');
-    } catch (e) {
-      toast('Could not reach the server to stop the arm', 'error');
-    }
+  // The main process posts /api/stop itself (tray menu and Ctrl+Shift+X) and
+  // then tells the page, so the pets let go of the arm straight away.
+  function stopArm() {
+    pets.forEach((p) => { if (p.state === 'has_arm') p.setState('idle'); });
   }
 
-  barSend.addEventListener('click', () => submit(barText.value, barAgent));
   barText.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') submit(barText.value, barAgent);
     if (e.key === 'Escape') closeBar();
   });
-  document.getElementById('bar-close').addEventListener('click', closeBar);
-  document.getElementById('bar-stop').addEventListener('click', stopArm);
-  stopPill.addEventListener('click', stopArm);
+  // Clicking into another window puts the bar away, unless a recording is still going.
+  window.addEventListener('blur', () => {
+    if (barOpen() && !recorder && now() - barOpenedAt > 0.5) closeBar();
+  });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !bar.classList.contains('hidden')) closeBar(); });
 
   // Hold to talk: record while the button is held, then speech to text.
@@ -890,7 +850,7 @@ const App = (() => {
         const blob = new Blob(chunks, { type: 'audio/webm' });
         recorder = null;
         barTalk.classList.remove('recording');
-        barTalk.textContent = 'Hold to talk';
+        barTalk.textContent = 'hold to talk';
         if (blob.size < 2000) return;
         if (flags.demo) { barText.value = 'Can someone lift the bottle'; return; }
         barTalk.classList.add('busy');
@@ -900,19 +860,19 @@ const App = (() => {
           const res = await fetch(flags.server + '/api/stt', { method: 'POST', body: form });
           const data = await res.json();
           if (data && data.text) submit(data.text, barAgent);
-          else toast('No words heard');
+          else report('no words heard');
         } catch (e) {
-          toast('Speech to text is not reachable', 'error');
+          report('speech to text is not reachable');
         } finally {
           barTalk.classList.remove('busy');
         }
       };
       recorder.start();
       barTalk.classList.add('recording');
-      barTalk.textContent = 'Listening';
+      barTalk.textContent = 'listening';
     } catch (e) {
       recorder = null;
-      toast('Microphone not available', 'error');
+      report('microphone not available');
     }
   }
   function endTalk() { if (recorder && recorder.state === 'recording') recorder.stop(); }
@@ -937,6 +897,9 @@ const App = (() => {
   }
 
   async function boot() {
+    // net.js and demo.js load after this file. Wait for them, or a fast start
+    // can reach Demo.start() before Demo exists.
+    if (document.readyState === 'loading') await new Promise((r) => document.addEventListener('DOMContentLoaded', r, { once: true }));
     flags = Object.assign(flags, await window.overlay.flags());
     dpr = window.devicePixelRatio || 1;
     W = window.innerWidth; H = window.innerHeight;
@@ -954,7 +917,6 @@ const App = (() => {
       presence = 'hidden';
       world.classList.add('away');
     }
-    renderEar();
     frame();
     if (flags.shots && flags.shots.length) {
       // Screenshot runs only: keep the compositor producing frames so
@@ -983,9 +945,18 @@ const App = (() => {
       };
     },
     bar: () => ({ open: !bar.classList.contains('hidden'), agent: barAgent }),
+    // Anything visible that is not a pet, its name, the scroll or the summoned bar.
+    // The self test expects this list to be empty.
+    furniture: () => [...document.body.querySelectorAll('*')].filter((el) => {
+      if (el === world || el.closest('.pet, .bubble, #bar, script, .keepalive')) return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== 'hidden';
+    }).map((el) => el.tagName + (el.id ? '#' + el.id : '')),
+    link: () => linkState,
+    states: () => pets.map((p) => p.id + ':' + p.state).join(' '),
     fps: () => tickRate,
   };
 
   boot();
-  return { handleEvent, setLink, toast, find, enqueueLine, CAST, BY_ID, presence: () => presence, listening: () => listenAwake };
+  return { handleEvent, setLink, find, enqueueLine, CAST, BY_ID, presence: () => presence, listening: () => listenAwake };
 })();

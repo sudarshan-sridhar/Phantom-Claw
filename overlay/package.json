@@ -9,7 +9,7 @@
     "demo": "electron . --demo",
     "sprites": "node tools/make_sprites.mjs",
     "snap": "node tools/make_sprites.mjs --snap-only",
-    "shot": "electron . --demo --shots=4000,11500,16000,22500 --quit-after=24000",
+    "shot": "electron . --demo --shots=1500,4300,23500 --quit-after=25000",
     "selftest": "electron . --demo --selftest"
   },
   "devDependencies": {
