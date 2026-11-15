@@ -1,7 +1,8 @@
 """Cutting a stream of 30 ms frames into utterances.
 
 Speech starts when most of the last few frames sound like a voice. It ends after about
-450 ms of quiet. Anything with less than about 300 ms of actual voice is dropped, which
+700 ms of quiet (LISTEN_SILENCE_MS), which leaves room for a slow speaker to pause between words.
+About 500 ms from before the start is kept so the first syllable is not lost. Anything with less than about 300 ms of actual voice is dropped, which
 gets rid of coughs, clicks and chair noise.
 """
 from __future__ import annotations
@@ -22,25 +23,37 @@ class Utterance:
     t_end: float           # monotonic time the last voiced frame ended
     t_cut: float           # monotonic time we decided it was over
     voiced_ms: int
+    muted: bool = False    # heard while a character was speaking; only a stop phrase counts
 
     @property
     def seconds(self) -> float:
         return len(self.audio) / config.RATE
 
 
-def make_vad(level: int = config.VAD_LEVEL, energy_min: float = config.ENERGY_MIN) -> Callable[[bytes], bool]:
-    """A frame test using webrtcvad, with an optional loudness floor on top."""
+def make_vad(level: int = config.VAD_LEVEL, energy_min: float = config.ENERGY_MIN, agc: bool = config.AGC and config.AGC_VAD) -> Callable[[bytes], bool]:
+    """A frame test using webrtcvad, with an optional loudness floor on top.
+
+    With agc on, both tests look at the frame after the automatic gain (see gain.LevelTracker),
+    so quiet speech from a low mic is not cut off or dropped. The frame kept for speech to text
+    is the original; the whole utterance is normalised later.
+    """
     import webrtcvad
 
+    from .gain import LevelTracker
+
     vad = webrtcvad.Vad(max(0, min(3, level)))
+    tracker = LevelTracker() if agc else None
 
     def is_speech(frame: bytes) -> bool:
+        if tracker is not None:
+            frame = tracker.apply(frame)
         if energy_min > 0:
             x = np.frombuffer(frame, dtype=np.int16).astype(np.float32)
             if float(np.sqrt(np.mean(x * x))) < energy_min:
                 return False
         return vad.is_speech(frame, config.RATE)
 
+    is_speech.tracker = tracker  # type: ignore[attr-defined]
     return is_speech
 
 
@@ -53,8 +66,13 @@ class Segmenter:
         min_speech_ms: int = config.MIN_SPEECH_MS,
         max_s: float = config.MAX_UTTERANCE_S,
         preroll_ms: int = config.PREROLL_MS,
+        end_db: float = config.END_DB,
     ):
         self.is_speech = is_speech
+        # Once an utterance is going, a frame more than end_db below its loudest part counts as
+        # quiet even if the VAD calls it voice. That is what lets an utterance end while other
+        # people keep talking further away. 0 turns it off.
+        self.end_ratio = 10 ** (-end_db / 20) if end_db > 0 else 0.0
         self.frame_ms = frame_ms
         self.end_frames = max(1, silence_ms // frame_ms)
         self.min_voiced = max(1, min_speech_ms // frame_ms)
@@ -73,6 +91,8 @@ class Segmenter:
         self.t_last_voice = 0.0
         self.pre.clear()
         self.recent.clear()
+        self.loud = 0.0
+        self.smooth = 0.0
 
     def feed(self, frame: bytes, t: float) -> Utterance | None:
         """Give one frame that ended at time t. Returns an utterance when one has just finished."""
@@ -91,6 +111,14 @@ class Segmenter:
             return None
 
         self.frames.append(frame)
+        if self.end_ratio:
+            x = np.frombuffer(frame, dtype=np.int16).astype(np.float32)
+            rms = float(np.sqrt(np.mean(x * x))) if len(x) else 0.0
+            self.smooth = rms if not self.smooth else 0.5 * self.smooth + 0.5 * rms
+            if voiced:
+                self.loud = max(self.loud, self.smooth)
+            if self.loud > 0 and self.smooth < self.loud * self.end_ratio:
+                voiced = False
         if voiced:
             self.voiced += 1
             self.quiet = 0

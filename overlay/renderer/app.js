@@ -47,7 +47,7 @@ const App = (() => {
   function bounds(p) {
     return {
       left: p.w / 2 + 12,
-      right: W - p.w / 2 - 12,
+      right: W - p.w / 2 - 40,      // room for the longest name
       top: p.h + 14,                 // standing on the top edge of the screen
       floor: H - TAG_ROOM,           // standing on the bottom edge (top of the taskbar)
     };

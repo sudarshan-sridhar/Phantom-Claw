@@ -4,7 +4,9 @@
     python -m backend.listen --awake              microphone, starts awake
     python -m backend.listen --file a.wav --file b.wav
                                                   play files through the same path as the mic
-    python -m backend.listen --mic-test 3         open the mic for 3 s and report what came in
+    python -m backend.listen --mic-test 5         talk for 5 s; prints levels and a verdict
+    python -m backend.listen --list-mics          list input devices (pick with --mic or LISTEN_MIC)
+    python -m backend.listen --engine eleven      ElevenLabs first, local model as the fallback
 
 A file item written as reply:path waits until a character is speaking before it plays,
 which is how the "does not hear itself" check is done without a person in the room.
@@ -80,23 +82,62 @@ def file_frames(listener: Listener, items: list[str], gap_s: float, fast: bool):
         time.sleep(0.2)
 
 
-def pick_mic(choice=None):
-    """The mic to use: --mic or LISTEN_MIC if given, else the laptop's built-in array, else the default."""
-    import os
-
+def list_inputs() -> list[tuple[int, str, str, int]]:
+    """(index, name, host API, default rate) for every input device."""
     import sounddevice as sd
 
-    choice = choice if choice is not None else (os.environ.get("LISTEN_MIC") or None)
-    if choice is not None:
-        return int(choice) if str(choice).isdigit() else choice
-    try:
-        mme = [h["name"] for h in sd.query_hostapis()].index("MME")
-        for i, d in enumerate(sd.query_devices()):
-            if d["max_input_channels"] > 0 and d["hostapi"] == mme and "microphone array" in d["name"].lower():
-                return i
-    except Exception:  # noqa: BLE001
-        pass
+    apis = [h["name"] for h in sd.query_hostapis()]
+    return [(i, " ".join(d["name"].split()), apis[d["hostapi"]], int(d["default_samplerate"]))
+            for i, d in enumerate(sd.query_devices()) if d["max_input_channels"] > 0]
+
+
+def match_device(devices, choice) -> int | None:
+    """An index from --mic / LISTEN_MIC: a number, or part of a device name (any case).
+    When several host APIs list the same mic, MME is preferred (it resamples to 16 kHz for us).
+
+    Only shared-mode host APIs are used (MME, DirectSound, WASAPI shared), so other apps such as
+    Wispr Flow keep using the same mic. WDM-KS (kernel streaming) can take a device for itself,
+    so it is never picked by name, and a WDM-KS index is swapped for the same mic under MME."""
+    if choice is None or not str(choice).strip():
+        return None
+    choice = str(choice).strip()
+    if choice.isdigit():
+        idx = int(choice)
+        d = next((d for d in devices if d[0] == idx), None)
+        if d is not None and d[2] == "Windows WDM-KS":
+            alt = match_device(devices, d[1][:20])
+            if alt is not None:
+                return alt
+            log(f"device {idx} is WDM-KS, which may lock the mic away from other apps (Wispr Flow); using it anyway")
+        return idx
+    hits = [d for d in devices if choice.lower() in d[1].lower()]
+    for api in ("MME", "Windows DirectSound", "Windows WASAPI"):
+        for d in hits:
+            if d[2] == api:
+                return d[0]
     return None
+
+
+def pick_mic(choice=None):
+    """The mic to use: --mic or LISTEN_MIC if given, else the laptop's built-in array, else the default."""
+    choice = choice if choice is not None else (config.MIC or None)
+    try:
+        devices = list_inputs()
+    except Exception:  # noqa: BLE001
+        return int(choice) if choice and str(choice).isdigit() else None
+    if choice is not None:
+        idx = match_device(devices, choice)
+        if idx is not None:
+            return idx
+        log(f'no input device matches "{choice}", using the default (see --list-mics)')
+    return match_device(devices, "microphone array")
+
+
+def print_mics(chosen) -> None:
+    for i, name, api, rate in list_inputs():
+        mark = "  <- used" if i == chosen else ""
+        print(f"{i:>3}  {name}  [{api}, {rate} Hz]{mark}")
+    print("Pick one with --mic <index or part of the name>, or set LISTEN_MIC the same way.")
 
 
 def mic_frames(stop: threading.Event, device=None):
@@ -134,22 +175,32 @@ def mic_frames(stop: threading.Event, device=None):
 
 
 def mic_test(seconds: float, device=None) -> None:
+    from .gain import LevelTracker, clip_levels, mic_report
+
+    print(f"Talk for the next {seconds:.0f} s at your normal distance and volume, for example "
+          f"\"Phantom Claw, start. Escanor, give me the bottle.\"", flush=True)
     stop = threading.Event()
-    n, peak, rms = 0, 0, []
     t_end = time.monotonic() + seconds
-    is_speech = make_vad()
-    voiced = 0
+    raw_vad, gain_vad = make_vad(agc=False), make_vad(agc=True)
+    frames, voiced_raw, voiced_gain = [], 0, 0
     for frame, _t in mic_frames(stop, device):
-        x = np.frombuffer(frame, dtype=np.int16).astype(np.float32)
-        n += 1
-        peak = max(peak, int(np.abs(x).max()))
-        rms.append(float(np.sqrt(np.mean(x * x))))
-        voiced += is_speech(frame)
+        frames.append(np.frombuffer(frame, dtype=np.int16))
+        voiced_raw += raw_vad(frame)
+        voiced_gain += gain_vad(frame)
         if time.monotonic() >= t_end:
             stop.set()
             break
-    log(f"mic test: {n} frames ({n * config.FRAME_MS / 1000:.1f} s of audio in {seconds:.1f} s), peak {peak}, "
-        f"median level {np.median(rms) if rms else 0:.0f}, loudest frame {max(rms) if rms else 0:.0f}, voiced frames {voiced}")
+    audio = np.concatenate(frames) if frames else np.zeros(0, dtype=np.int16)
+    lv = clip_levels(audio)
+    tr: LevelTracker = gain_vad.tracker
+    verdict, tips = mic_report(lv, voiced_raw, voiced_gain, len(frames))
+    n = len(frames)
+    log(f"mic test: {n * config.FRAME_MS / 1000:.1f} s of audio, peak {lv['peak']} of 32767, RMS {lv['rms']:.0f}, "
+        f"noise floor about {lv['floor']:.0f}, speech level about {lv['speech']:.0f}")
+    log(f"voiced frames {voiced_raw} as it comes in, {voiced_gain} with the automatic gain (x{tr.gain():.1f} at the end)")
+    log(f"verdict: {verdict}")
+    for t in tips:
+        log("  " + t)
 
 
 def main() -> None:
@@ -160,14 +211,21 @@ def main() -> None:
     ap.add_argument("--awake", action="store_true", help="start awake")
     ap.add_argument("--require-name", dest="require_name", action="store_true", default=None)
     ap.add_argument("--no-require-name", dest="require_name", action="store_false")
-    ap.add_argument("--stt", choices=["auto", "cuda", "cpu", "server"], default=config.DEVICE)
-    ap.add_argument("--model", default=config.MODEL, help="faster-whisper model name, for example base.en or small.en")
-    ap.add_argument("--mic", default=None, help="microphone device index or name (default: the built-in mic array, else the system default)")
-    ap.add_argument("--mic-test", type=float, default=0, help="open the mic for this many seconds, report, exit")
+    ap.add_argument("--engine", choices=["auto", "eleven", "local"], default=config.ENGINE,
+                    help="speech to text: eleven (ElevenLabs, local fallback), local (faster-whisper), auto (local with a big GPU model, else eleven if the key is set)")
+    ap.add_argument("--stt", choices=["auto", "cuda", "cpu", "server"], default=config.DEVICE, help="where the local model runs")
+    ap.add_argument("--model", default=config.MODEL, help="faster-whisper model name, for example large-v3-turbo or small.en")
+    ap.add_argument("--mic", default=None, help="microphone index or part of its name (default: the built-in mic array, else the system default)")
+    ap.add_argument("--list-mics", action="store_true", help="list input devices and exit")
+    ap.add_argument("--mic-test", type=float, nargs="?", const=5.0, default=0, help="talk for this many seconds (default 5), get levels and a verdict, exit")
+    ap.add_argument("--no-fix", action="store_true", help="do not repair near misses of names and items")
     ap.add_argument("--no-hotkey", action="store_true")
     args = ap.parse_args()
 
     mic = pick_mic(args.mic)
+    if args.list_mics:
+        print_mics(mic)
+        return
     if args.mic_test:
         mic_test(args.mic_test, mic)
         return
@@ -180,11 +238,12 @@ def main() -> None:
             raise SystemExit(f"no such file: {path}")
 
     require_name = config.REQUIRE_NAME if args.require_name is None else args.require_name
-    stt = Transcriber(device=args.stt, model=args.model)
+    stt = Transcriber(device=args.stt, model=args.model, engine=args.engine)
     log("loading speech to text...")
     log(f"speech path: {stt.load()}")
     server = Server()
-    listener = Listener(stt, Segmenter(make_vad()), server, require_name=require_name)
+    listener = Listener(stt, Segmenter(make_vad()), server, require_name=require_name, fix=not args.no_fix)
+    log(f"automatic gain {'on' if config.AGC else 'off'}, utterance ends after {config.SILENCE_MS} ms of quiet")
     log(f"require a name: {'yes' if require_name else 'no, unnamed requests go to Merlin'}")
 
     threading.Thread(target=watch_server, args=(listener,), daemon=True, name="ws").start()

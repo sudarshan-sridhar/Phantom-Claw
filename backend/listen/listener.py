@@ -14,7 +14,8 @@ import httpx
 from backend.agents.merlin import looks_like_request
 
 from . import config
-from .names import called_text, find_agent, find_wake, name_alone
+from .fix import repair
+from .names import called_text, find_agent, find_short_stop, find_wake, name_alone
 from .vad import Segmenter, Utterance
 
 
@@ -93,6 +94,12 @@ class Server:
         except Exception:  # noqa: BLE001
             return None
 
+    def stop(self) -> dict:
+        """Stop the arm and any desk plan (POST /api/stop, no body)."""
+        r = self.http.post("/api/stop", timeout=httpx.Timeout(10.0, connect=2.0))
+        r.raise_for_status()
+        return r.json()
+
     def request(self, text: str, agent: str | None) -> dict:
         r = self.http.post("/api/request", json={"text": text, "agent": agent})
         r.raise_for_status()
@@ -107,15 +114,20 @@ class Listener:
         server: Server | None = None,
         require_name: bool = config.REQUIRE_NAME,
         gate: Gate | None = None,
+        fix: bool = config.FIX,
     ):
         self.stt = transcriber
         self.seg = segmenter
         self.server = server
         self.require_name = require_name
+        self.fix = fix
         self.gate = gate or Gate()
         self.awake = False
         self.lock = threading.Lock()
-        self.utts: queue.Queue = queue.Queue()
+        # Short clips first, so a "stop" is not stuck behind a long clip waiting for the model.
+        self.utts: queue.PriorityQueue = queue.PriorityQueue()
+        self._seq = 0
+        self.stops = 0
         self.pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="request")
         self.records: list[dict] = []
         self.waiting_reply: dict[str, dict] = {}  # who we are waiting to hear from -> record
@@ -197,32 +209,40 @@ class Listener:
     # ------------------------------------------------------------ audio
 
     def feed_frames(self, frames: Iterable[tuple[bytes, float]]) -> None:
-        """Run frames through the mute gate and the segmenter. Same path for the mic and for files."""
+        """Run frames through the segmenter, marking what was heard while the mic is "muted".
+
+        Muted speech is still cut and transcribed, but only a stop phrase in it is acted on (see
+        decide). At each change between muted and open the utterance in progress is ended, so
+        speech on either side is judged on its own. Same path for the mic and for files."""
         for frame, t in frames:
             if self._stop.is_set():
                 break
-            if self.gate.muted(t):
-                if not self._was_muted:
-                    self._was_muted = True
+            muted = self.gate.muted(t)
+            if muted != self._was_muted:
                 if self.seg.active:
-                    self.muted_utterance_cut += 1
-                    self.seg.reset()
-                if self.seg.is_speech(frame):
-                    self.muted_voice_frames += 1
-                continue
-            if self._was_muted:
-                self._was_muted = False
-                if self.muted_voice_frames:
-                    log(f"mic open again; ignored {self.muted_voice_frames * config.FRAME_MS / 1000:.1f} s of voice while muted")
+                    if muted:
+                        self.muted_utterance_cut += 1
+                    self._put(self.seg.flush(t), self._was_muted)
+                if not muted and self.muted_voice_frames:
+                    log(f"mic open again; {self.muted_voice_frames * config.FRAME_MS / 1000:.1f} s of voice came in while muted (only stop phrases count)")
                 self.muted_voice_frames = 0
+                self._was_muted = muted
             utt = self.seg.feed(frame, t)
-            if utt is not None:
-                self.utts.put(utt)
+            if muted and self.seg.active:
+                self.muted_voice_frames += 1
+            self._put(utt, muted)
+
+    def _put(self, utt: Utterance | None, muted: bool) -> None:
+        if utt is None:
+            return
+        utt.muted = muted
+        self._seq += 1
+        self.utts.put((0 if utt.seconds <= 2.5 else 1, self._seq, utt))
 
     def stt_worker(self) -> None:
         while not self._stop.is_set():
             try:
-                utt = self.utts.get(timeout=0.2)
+                _prio, _seq, utt = self.utts.get(timeout=0.2)
             except queue.Empty:
                 continue
             try:
@@ -236,23 +256,44 @@ class Listener:
 
     def process(self, utt: Utterance) -> dict:
         self._n += 1
-        rec = {"n": self._n, "seconds": round(utt.seconds, 2), "t_end": utt.t_end, "t_cut": utt.t_cut}
+        rec = {"n": self._n, "seconds": round(utt.seconds, 2), "t_end": utt.t_end, "t_cut": utt.t_cut,
+               "muted": bool(getattr(utt, "muted", False))}
         t0 = time.monotonic()
-        text = self.stt.transcribe(utt.audio)
+        raw = self.stt.transcribe(utt.audio)
+        info = dict(getattr(self.stt, "last", None) or {})
+        text, changes = repair(raw) if (self.fix and raw) else (raw, [])
         rec["t_text"] = time.monotonic()
         rec["stt_ms"] = round((rec["t_text"] - t0) * 1000)
+        rec["raw"] = raw
         rec["text"] = text
+        rec["engine"] = info.get("engine")
         self.records.append(rec)
+        how = f"{info.get('engine') or 'stt'} {rec['stt_ms']} ms" + (f", gain x{info['gain']}" if info.get("gain", 1) > 1 else "")
+        if info.get("fallback"):
+            how += f", {info['fallback']}"
+        if rec["muted"]:
+            how += ", heard while muted"
         if not text:
             rec["action"] = "nothing heard"
-            log(f"#{rec['n']} {utt.seconds:.1f} s clip, no words")
+            if not rec["muted"]:
+                log(f"#{rec['n']} {utt.seconds:.1f} s clip, no words ({how})")
             return rec
-        log(f'#{rec["n"]} heard "{text}" ({utt.seconds:.1f} s clip, speech end to text {ms(utt.t_end, rec["t_text"])}, model {rec["stt_ms"]} ms)')
+        fixed = f' -> fixed "{text}"' if changes else ""
+        log(f'#{rec["n"]} heard "{raw}"{fixed} ({utt.seconds:.1f} s clip, speech end to text {ms(utt.t_end, rec["t_text"])}, {how})')
         self.decide(text, rec)
         return rec
 
     def decide(self, text: str, rec: dict) -> None:
         cmd, _a, _b = find_wake(text)
+        # A stop comes first, whatever else is going on: "Phantom Claw stop" always, and a bare
+        # "stop", "stop it", "halt", "freeze" while awake. Also while muted (a character talking,
+        # the arm moving), when nothing else is acted on.
+        if cmd == "stop" or (self.awake and find_short_stop(text)):
+            self.stop_arm(rec, text)
+            return
+        if rec.get("muted"):
+            rec["action"] = "ignored, muted"
+            return
         if not self.awake:
             if cmd == "start":
                 rec["action"] = "wake"
@@ -260,10 +301,6 @@ class Listener:
             else:
                 rec["action"] = "ignored, asleep"
                 log(f"#{rec['n']} asleep, ignored")
-            return
-        if cmd == "stop":
-            rec["action"] = "sleep"
-            self.set_awake(False, "voice")
             return
         if cmd == "start":
             rec["action"] = "ignored, already awake"
@@ -292,6 +329,24 @@ class Listener:
         self.gate.begin(key)
         self.pool.submit(self._send, rec, key, agent or "merlin", text, send_text, req_agent)
 
+    def stop_arm(self, rec: dict, text: str) -> None:
+        """Stop the arm at once, on this thread, before anything else; then go to sleep."""
+        self.stops += 1
+        rec["action"] = "stop"
+        t0 = time.monotonic()
+        if self.server is not None and hasattr(self.server, "stop"):
+            try:
+                self.server.stop()
+                log(f'#{rec["n"]} STOP: "{text}", arm stop sent ({(time.monotonic() - t0) * 1000:.0f} ms)')
+            except Exception as e:  # noqa: BLE001
+                rec["error"] = f"stop failed: {type(e).__name__}"
+                log(f"#{rec['n']} STOP heard but POST /api/stop failed: {type(e).__name__}: {str(e)[:120]}")
+        else:
+            log(f'#{rec["n"]} STOP: "{text}" (no server to tell)')
+        if self.awake:
+            rec["action"] = "stop, sleep"
+            self.set_awake(False, "voice")
+
     def _send(self, rec: dict, key: str, hear_agent: str, heard: str, send_text: str, req_agent: str | None) -> None:
         try:
             if self.server is None:
@@ -307,6 +362,13 @@ class Listener:
             log(f"#{rec['n']} request to {req_agent or 'Merlin to pick'}: \"{send_text}\" (text to request {ms(rec['t_text'], rec['t_sent'])})")
             try:
                 res = self.server.request(send_text, req_agent)
+                if isinstance(res, dict) and res.get("ignored"):
+                    # The server is still on the last request. Normal; it is not retried.
+                    rec["ignored"] = res.get("ignored")
+                    with self.lock:
+                        self.waiting_reply.pop(key, None)
+                    log(f"#{rec['n']} server ignored it ({res.get('ignored')}), still working on the last request; not retried")
+                    return
                 rec["replied_agent"] = res.get("agent")
                 rec["reply"] = res.get("say")
             except Exception as e:  # noqa: BLE001
@@ -335,7 +397,7 @@ class Listener:
     def summary(self) -> list[dict]:
         out = []
         for r in self.records:
-            d = {k: r.get(k) for k in ("n", "text", "action", "agent", "sent_text", "replied_agent", "reply", "error")}
+            d = {k: r.get(k) for k in ("n", "raw", "text", "engine", "muted", "ignored", "action", "agent", "sent_text", "replied_agent", "reply", "error")}
             d["end_to_text_ms"] = _d(r.get("t_end"), r.get("t_text"))
             d["stt_ms"] = r.get("stt_ms")
             d["text_to_sent_ms"] = _d(r.get("t_text"), r.get("t_sent"))

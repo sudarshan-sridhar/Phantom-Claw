@@ -80,11 +80,11 @@ def run_segmenter(pattern, **kw):
 
 
 def test_segment_ends_after_silence():
-    utts = run_segmenter("0" * 10 + "1" * 30 + "0" * 20)
+    utts = run_segmenter("0" * 10 + "1" * 30 + "0" * 30)
     assert len(utts) == 1
     u = utts[0]
     assert abs(u.t_end - 40 * 0.03) < 1e-6           # last voiced frame
-    assert abs(u.t_cut - u.t_end - 15 * 0.03) < 1e-6  # 450 ms of quiet ends it
+    assert abs(u.t_cut - u.t_end - 23 * 0.03) < 1e-6  # 700 ms (23 frames) of quiet ends it
 
 
 def test_short_clip_dropped():
@@ -92,7 +92,7 @@ def test_short_clip_dropped():
 
 
 def test_short_pause_does_not_split():
-    utts = run_segmenter("1" * 20 + "0" * 10 + "1" * 20 + "0" * 20)
+    utts = run_segmenter("1" * 20 + "0" * 20 + "1" * 20 + "0" * 30)  # a 600 ms pause in the middle
     assert len(utts) == 1
 
 
@@ -167,6 +167,10 @@ class FakeServer:
     def get_listen(self):
         return False
 
+    def stop(self):
+        self.calls.append(("stop",))
+        return {"ok": True}
+
     def request(self, text, agent):
         self.calls.append(("request", text, agent))
         return {"agent": agent, "say": "ok"}
@@ -203,8 +207,9 @@ def test_states_and_routing():
     assert say(lis, stt, "what time is it")["action"] == "ignored, no name"
     say(lis, stt, "Merlin, who is free")
     assert ("request", "Merlin, who is free", None) in srv.calls
-    assert say(lis, stt, "Phantom Claw, stop.")["action"] == "sleep"
-    assert not lis.awake
+    assert say(lis, stt, "Phantom Claw, stop.")["action"] == "stop, sleep"
+    assert not lis.awake and ("stop",) in srv.calls
+    assert srv.calls.index(("stop",)) < srv.calls.index(("listen", False))  # the arm stops first
 
 
 def test_unnamed_goes_to_merlin_when_names_not_required():
@@ -215,12 +220,40 @@ def test_unnamed_goes_to_merlin_when_names_not_required():
     assert ("event", {"type": "hear", "agent": "merlin", "text": "what time is it"}) in srv.calls
 
 
-def test_muted_frames_never_reach_the_segmenter():
-    fed = []
-    lis = Listener(FakeSTT(), Segmenter(lambda f: fed.append(1) or True), None)
-    lis.gate.until = 10.0
-    lis.feed_frames((FRAME, 1.0 + i * 0.03) for i in range(100))
-    assert lis.utts.empty() and not lis.seg.active
+def test_muted_speech_is_cut_and_marked_muted():
+    pattern = "1" * 40 + "0" * 40
+    flags = iter(pattern * 3)
+    lis = Listener(FakeSTT(), Segmenter(lambda f: next(flags) == "1"), None)
+    lis.gate.until = 2.0  # muted for the first 2 s, open after
+    lis.feed_frames((FRAME, 0.03 * (i + 1)) for i in range(len(pattern) * 3))
+    got = []
+    while not lis.utts.empty():
+        got.append(lis.utts.get()[2].muted)
+    assert got[0] is True and got[-1] is False
+
+
+def test_only_a_stop_counts_while_muted():
+    lis, stt, srv = make_listener(require_name=False)
+    lis.awake = True
+    from backend.listen.vad import Utterance
+
+    def heard(text):
+        stt.texts.append(text)
+        u = Utterance(np.zeros(4800, dtype=np.int16), 0.0, 1.0, 1.45, 600, muted=True)
+        return lis.process(u)
+
+    assert heard("Escanor, give me the bottle")["action"] == "ignored, muted"
+    assert heard("I will stop when I am done")["action"] == "ignored, muted"
+    assert not any(c[0] == "request" for c in srv.calls)
+    assert heard("stop!")["action"] == "stop, sleep" and ("stop",) in srv.calls
+
+
+def test_busy_reply_is_not_retried():
+    lis, stt, srv = make_listener(require_name=False)
+    srv.request = lambda text, agent: srv.calls.append(("request", text, agent)) or {"ignored": "busy"}
+    lis.awake = True
+    r = say(lis, stt, "Ban, hand me the scissors")
+    assert r.get("ignored") == "busy" and sum(c[0] == "request" for c in srv.calls) == 1
 
 
 def test_names_not_required_by_default_but_chatter_is_dropped():
