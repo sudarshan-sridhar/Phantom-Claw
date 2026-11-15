@@ -300,7 +300,7 @@ class LiveDecoder:
 
 def request_for(rate: int) -> tuple[str, str | None]:
     kind, item = ACTIONS[rate]
-    return ("stop", None) if kind == "stop" else ("request", f"give me the {item}")
+    return ("stop", None) if kind == "stop" else ("request", f"Gowther, give me the {item}")   # one named character, so nobody adds extras
 
 
 def answer_parts(ans: dict) -> dict:
