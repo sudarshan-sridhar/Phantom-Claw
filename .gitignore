@@ -35,3 +35,7 @@ third_party/
 
 # photos and videos of the build (people are in them)
 media/
+
+# made at run time
+setup/brain_calibration.json
+page.html
