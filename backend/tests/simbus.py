@@ -7,6 +7,8 @@ can check goals and torque. Things that happen in the world:
 - grip_ok: the bottle cap is between the jaws, so closing stops at CAP (else they close fully)
 - block: a joint cannot pass these limits (a turn that cannot finish)
 - at(t, fn): run fn when the pretend clock reaches t (a tug on the bottle)
+- s[i].sag: a joint settles that many ticks short of its goal, as a loaded shoulder or elbow does
+- truth: set to [] to record where every servo really is at 30 Hz (truth_trace() for trace_report)
 
 FakeVision answers like backend.vision.Vision from a pretend desk.
 """
@@ -41,6 +43,7 @@ class _Servo:
         self.torque_limit = 1000
         self.block = None
         self.ext = 0.0
+        self.sag = 0.0            # stops this many ticks short of its goal (a loaded shoulder or elbow)
 
 
 class SimBus:
@@ -55,6 +58,9 @@ class SimBus:
         self.events = []
         self.current = 60         # raw current reading (x 6.5 mA)
         self.bus_s = 0.0025       # each read or write takes about this long on the real USB adapter
+        self.truth = None         # set to [] to record where every servo really is, at truth_hz
+        self.truth_hz = 30.0
+        self._truth_t = -1.0
 
     # PortHandler
     def openPort(self):
@@ -85,7 +91,8 @@ class SimBus:
                 vmax = sv.speed if sv.speed > 0 else 3000.0
                 a = sv.acc * 100.0 if sv.acc > 0 else 1e5
                 e = sv.goal - sv.pos
-                want = math.copysign(min(vmax, math.sqrt(2 * a * abs(e))), e) if abs(e) > 0.5 else 0.0
+                left = abs(e) - sv.sag          # a sagging joint settles this many ticks short
+                want = math.copysign(min(vmax, math.sqrt(2 * a * left)), e) if left > 0.5 else 0.0
                 dv = max(-a * dt, min(a * dt, want - sv.vel))
                 sv.vel += dv
                 new = sv.pos + sv.vel * dt
@@ -102,6 +109,15 @@ class SimBus:
                         for s2 in self.s.values():
                             s2.ext = 0.0
                 sv.pos = new
+            if self.truth is not None and self.last - self._truth_t >= 1.0 / self.truth_hz - 1e-9:
+                self._truth_t = self.last
+                self.truth.append([self.last] + [int(round(self.s[i].pos)) for i in range(1, 7)])
+
+    def truth_trace(self, arm_trace):
+        """The recorded truth in the same form as RealArm.trace_stop(), with the arm's events, so
+        trace_report can check the real motion between the arm's own reads too."""
+        t0 = arm_trace["t0"]
+        return {**arm_trace, "rows": [[round(r[0] - t0, 4)] + r[1:] for r in self.truth if r[0] >= t0]}
 
     # PacketHandler
     def read1ByteTxRx(self, port, i, a):

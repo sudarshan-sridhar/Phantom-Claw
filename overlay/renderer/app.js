@@ -64,34 +64,29 @@ const App = (() => {
   function lerpY(b, y0, y1) { return clamp(H * rand(y0, y1), b.top, b.floor); }
 
   // Each pet has a home in a different part of the screen, and roams from it.
-  const HOME = {
-    escanor: (p) => SURFACES.floor(p, 0.04, 0.34),
-    elizabeth: (p) => SURFACES.free(p, 0.05, 0.30, 0.14, 0.40),
-    ban: (p) => SURFACES.right(p, 0.30, 0.70),
-    king: (p) => SURFACES.floor(p, 0.68, 0.96),
-    gowther: (p) => SURFACES.free(p, 0.40, 0.60, 0.58, 0.80),
-    merlin: (p) => SURFACES.free(p, 0.60, 0.90, 0.14, 0.36),
+  // Each pet keeps to its own stretch of the bottom edge or the right edge, out of the way of
+  // the work in the middle of the screen. It shuffles a little along that stretch and no more.
+  const SPOT = {
+    escanor: (p) => SURFACES.floor(p, 0.34, 0.46),
+    gowther: (p) => SURFACES.floor(p, 0.52, 0.64),
+    king: (p) => SURFACES.floor(p, 0.70, 0.82),
+    merlin: (p) => SURFACES.right(p, 0.16, 0.30),
+    elizabeth: (p) => SURFACES.right(p, 0.40, 0.54),
+    ban: (p) => SURFACES.right(p, 0.64, 0.78),
   };
-  const ROAM = {
-    escanor: (p) => pick([() => SURFACES.floor(p), () => SURFACES.floor(p), () => SURFACES.top(p, 0.05, 0.6), () => SURFACES.left(p)]),
-    elizabeth: (p) => SURFACES.free(p, 0.04, 0.96, 0.10, 0.85),
-    ban: (p) => pick([() => SURFACES.floor(p), () => SURFACES.top(p), () => SURFACES.left(p), () => SURFACES.right(p), () => SURFACES.free(p, 0.1, 0.9, 0.2, 0.8)]),
-    king: (p) => pick([() => SURFACES.floor(p, 0.3, 1), () => SURFACES.right(p, 0.5, 0.9), () => SURFACES.top(p, 0.6, 1)]),
-    gowther: (p) => SURFACES.free(p, 0.15, 0.85, 0.35, 0.88),
-    merlin: (p) => SURFACES.free(p, 0.10, 0.92, 0.10, 0.45),
-  };
+  const HOME = SPOT;
+  const ROAM = SPOT;
   function pick(fns) { return fns[Math.floor(Math.random() * fns.length)](); }
 
   // How each habit travels, and how long it rests.
   const MOTION = {
-    strut: { walk: 46, leap: 300, hop: 2, rest: [2.5, 6], roam: 0.3 },
-    drift: { drift: 70, rest: [2, 5], roam: 0.35 },
-    dart: { walk: 260, leap: 1100, hop: 1.5, rest: [0.6, 2.2], roam: 0.55 },
-    sleep: { walk: 24, leap: 220, hop: 1, rest: [18, 36], roam: 0.25 },
-    line: { line: 62, hop: 1, rest: [6, 12], roam: 0.3 },
-    float: { drift: 48, rest: [3, 7], roam: 0.35 },
+    strut: { walk: 26, leap: 26, hop: 0, rest: [6, 14], roam: 0.3 },
+    drift: { drift: 22, rest: [6, 12], roam: 0.3 },
+    dart: { walk: 40, leap: 40, hop: 0, rest: [4, 9], roam: 0.4 },
+    sleep: { walk: 14, leap: 14, hop: 0, rest: [24, 48], roam: 0.2 },
+    line: { line: 24, hop: 0, rest: [8, 16], roam: 0.3 },
+    float: { drift: 18, rest: [7, 14], roam: 0.3 },
   };
-
   // Pick a spot from a generator that keeps clear of the other pets.
   function clearSpot(p, gen, minGap) {
     let best = null, bestScore = -Infinity;
@@ -347,9 +342,9 @@ const App = (() => {
     render(big) {
       const sp = this.sprite;
       const artW = sp.right - sp.left + 1, artH = sp.bottom - sp.top + 1;
-      let u = Math.max(2, Math.round(112 * dpr / artH));
-      while (u > 2 && artH * u / dpr > 128) u--;
-      if (big) u += 1;
+      let u = Math.max(1, Math.round(60 * dpr / artH));
+      while (u > 1 && artH * u / dpr > 68) u--;
+      // No growing when it holds the arm: the sparkle is enough at this size.
       this.unit = u;
       const split = Math.round(artH * 0.5);
       const draw = (cv, y0, rows) => {
@@ -522,10 +517,8 @@ const App = (() => {
       let body = 0;
       if (this.def.habit === 'float') body -= [0, 1, 2, 1][Math.floor((t + this.seed) / 0.7) % 4];
       if (this.def.habit === 'drift') body -= [0, 1, 2, 1][Math.floor((t + this.seed) / 0.4) % 4];
-      if (talking) body -= (Math.floor(t / 0.16) % 2) * 2;
+      if (talking) body -= Math.floor(t / 0.22) % 2;
       if (this.state === 'listening') body -= 1;
-      // A quick hop when it hears its name or the team wakes up.
-      if (t - this.perkAt < 0.35) body -= 3;
       const period = this.def.habit === 'sleep' ? 2.6 : 1.4;
       const breath = (this.state === 'idle' && !talking && !this.move && ((t + this.seed) % period) < period / 2) ? 1 : 0;
       const sparkOn = this.state === 'has_arm' || this.state === 'listening';

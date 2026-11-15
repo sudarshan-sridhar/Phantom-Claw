@@ -61,6 +61,7 @@ class Hub:
 
 
 hub = Hub()
+_in_flight = False      # a request is being handled right now
 state: dict[str, Any] = {"arm": None, "arm_source": None, "pipeline": None}
 
 
@@ -102,7 +103,17 @@ class RequestBody(BaseModel):
 async def api_request(body: RequestBody):
     if not body.text.strip():
         raise HTTPException(400, "text is empty")
-    return await get_pipeline().handle(body.text, body.agent)
+    # One request at a time. Anything said while a job is running is dropped, so a misheard
+    # word cannot start a second character talking or moving over the first.
+    global _in_flight
+    if _in_flight:
+        await hub.emit({"type": "ignored", "text": body.text[:200], "why": "busy"})
+        return {"ignored": "busy"}
+    _in_flight = True
+    try:
+        return await get_pipeline().handle(body.text, body.agent)
+    finally:
+        _in_flight = False
 
 
 @app.post("/api/stt")

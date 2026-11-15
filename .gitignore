@@ -45,3 +45,11 @@ backend/brain/test_out/
 setup/brain_clench.json
 setup/wrist_samples/
 setup/last_wrist_aim_*.jpg
+
+# headset work, parked
+backend/brain/
+third_party/
+backend/tests/test_brain*.py
+setup/brain_*.json
+CHEATSHEET.md
+backend/listen/test_out/

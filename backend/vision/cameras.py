@@ -94,9 +94,35 @@ HAND_PROMPT = ('This is the view from a camera on a robot gripper that is holdin
                '{"hand": true} or {"hand": false}.')
 
 
+# Seeing a hand without asking anyone. The arm stands still while it holds the item out, so the
+# wrist picture only changes when something comes into it. A hand shows up as skin-coloured
+# pixels that were not there a moment ago, or, when it is right at the lens, as most of the
+# picture changing at once.
+HAND = {
+    "baseline_frames": 5,       # pictures averaged, right after the arm stops, as "nothing there"
+    "diff": 28,                 # grey level change that counts as a changed pixel
+    "skin_share": 0.03,         # this share of the picture newly skin-coloured means a hand
+    "big_share": 0.30,          # or this share changed at all (a hand right at the lens)
+    "frames": 3,                # for this many pictures in a row
+}
+
+
+def hand_shares(base_gray, frame):
+    """(share of the picture that changed and is skin-coloured, share that changed at all)."""
+    import cv2
+    import numpy as np
+    small = cv2.resize(frame, (160, 90))
+    gray = cv2.GaussianBlur(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY), (5, 5), 0)
+    changed = cv2.absdiff(gray, base_gray) > HAND["diff"]
+    ycc = cv2.cvtColor(small, cv2.COLOR_BGR2YCrCb)
+    skin = cv2.inRange(ycc, (40, 135, 85), (255, 180, 135)) > 0
+    n = float(changed.size)
+    return float(np.count_nonzero(changed & skin)) / n, float(np.count_nonzero(changed)) / n
+
+
 class HandWatcher(threading.Thread):
-    """Runs beside the arm while it offers the bottle: once armed, keeps asking Gemini whether a
-    hand is in the wrist camera's view. As watch_for_hand() in the script."""
+    """Runs beside the arm while it holds an item out: once armed, watches the wrist camera for a
+    hand coming in, on the laptop itself, many times a second. .hand turns True when it sees one."""
 
     def __init__(self, index=WRIST_INDEX, save=True):
         super().__init__(daemon=True)
@@ -106,10 +132,13 @@ class HandWatcher(threading.Thread):
         self.hand = False
         self.checks = 0
         self.done = False
+        self.seen = None        # the shares that set it off, for the result line
 
     def run(self):
         import cv2
+        import numpy as np
         cap = _open(self.index, 1280, 720)
+        base, stack, streak = None, [], 0
         try:
             while not self.done:
                 f = None
@@ -118,22 +147,28 @@ class HandWatcher(threading.Thread):
                     if ok:
                         f = fr
                 if f is None or not self.armed:
+                    base, stack, streak = None, [], 0
                     time.sleep(0.02)
                     continue
                 f = cv2.rotate(f, cv2.ROTATE_180)
-                if self.save:
-                    try:
-                        cv2.imwrite(str(SETUP / "last_handover_view.jpg"), cv2.resize(f, (640, 360)))
-                    except Exception:
-                        pass
-                try:
-                    ans = gemini.ask_json(f, HAND_PROMPT, size=(640, 360), timeout=4, models=gemini.MODELS[:1], quality=80)
-                    self.checks += 1
-                    if isinstance(ans, dict) and ans.get("hand") is True:
-                        self.hand = True
-                        break
-                except Exception:
-                    pass
+                if base is None:
+                    small = cv2.resize(f, (160, 90))
+                    stack.append(cv2.GaussianBlur(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY), (5, 5), 0))
+                    if len(stack) >= HAND["baseline_frames"]:
+                        base = np.median(np.stack(stack), axis=0).astype(np.uint8)
+                    continue
+                skin, big = hand_shares(base, f)
+                self.checks += 1
+                streak = streak + 1 if (skin >= HAND["skin_share"] or big >= HAND["big_share"]) else 0
+                if streak >= HAND["frames"]:
+                    self.hand = True
+                    self.seen = {"skin_share": round(skin, 3), "changed_share": round(big, 3)}
+                    if self.save:
+                        try:
+                            cv2.imwrite(str(SETUP / "last_handover_view.jpg"), cv2.resize(f, (640, 360)))
+                        except Exception:
+                            pass
+                    break
         finally:
             cap.release()
 

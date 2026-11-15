@@ -20,6 +20,10 @@ The general skills (several in a row share what the arm is holding):
     ... -m backend.arm.try_real pick hand_over --target sharpie --wait 5 --lift-style high
     --target and --where also take a desk position "x,y" in cm from the arm base (x right, y away).
 
+Smoothness check: add --trace FILE to any run (positions of every joint at about 30 Hz, the
+phases, every goal written), then: ... -m backend.arm.trace_report FILE
+    ... -m backend.arm.try_real pick place --target bottle --pace 0 --trace run.json
+
 Any pose is fine to start from: if the arm is not at rest it goes to rest first (and puts a held
 bottle down on the table). Press Ctrl+C to stop: the arm holds where it is.
 """
@@ -202,6 +206,9 @@ def main(argv=None):
     ap.add_argument("--plan", action="store_true", help="print the plan only; do not open the port")
     ap.add_argument("--look", action="store_true", help="with --plan and fetch_bottle: also ask the overhead camera")
     ap.add_argument("--yes", action="store_true", help="skip the 'area clear' question")
+    ap.add_argument("--trace", metavar="FILE",
+                    help="record every joint's position at about 30 Hz for the whole run into FILE (JSON); "
+                         "read it with: python -m backend.arm.trace_report FILE")
     ap.add_argument("--aim", choices=["low", "all", "off"],
                     help="pick: which tiers line up with the wrist camera before going down (default low, "
                          "or PHANTOM_WRIST_AIM)")
@@ -242,6 +249,30 @@ def main(argv=None):
     def phase(name):
         print(f"{time.time() - t0:6.1f} s  {name}", flush=True)
 
+    if a.trace:
+        arm.trace_start()
+    try:
+        out = _run_plan(arm, plan, phase)
+    finally:
+        if a.trace:
+            _save_trace(arm.trace_stop(), a.trace)
+    st = arm.status()
+    print("joints:", st["joints"], "holding:", st.get("held"))
+    arm.close()
+    return 0 if out.get("ok") else 1
+
+
+def _save_trace(trace, path):
+    import json
+    if trace is None:
+        return
+    Path(path).write_text(json.dumps(trace))
+    print(f"trace: {len(trace['rows'])} samples, {len(trace['events'])} events in {path}; "
+          f"read it with: python -m backend.arm.trace_report {path}", flush=True)
+
+
+def _run_plan(arm, plan, phase):
+    out = {}
     for sk, params in plan:
         out = {}
         print(f"--- {sk}", flush=True)
@@ -258,10 +289,7 @@ def main(argv=None):
         print("result:", out)
         if not out.get("ok") and out.get("result") != "not_taken":
             break           # the next skill would not make sense; it can be run by hand
-    st = arm.status()
-    print("joints:", st["joints"], "holding:", st.get("held"))
-    arm.close()
-    return 0 if out.get("ok") else 1
+    return out
 
 
 if __name__ == "__main__":

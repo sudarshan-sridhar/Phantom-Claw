@@ -72,13 +72,15 @@ down, it looks through the wrist camera and lines the jaws up, for `low` items b
    (`backend/vision/wrist_aim.py`): the angle of the item's long side clockwise from vertical, and
    the x where its centre line crosses the jaw row. Plain OpenCV first (the item's two long edges;
    instant); Gemini only when OpenCV is not sure (one call, about 10 s); neither sure: no reading.
-2. Angle off by more than 6 degrees: turn the wrist roll only (turning the wrist turns the picture).
-   Otherwise, offset more than 25 px: turn the base. Otherwise, for a compact item only (a case, a
+2. Angle off by more than 6 degrees: turn the wrist roll only (turning the wrist turns the picture),
+   unless the turn is 15 degrees or less: then the pan read from the same picture goes with it,
+   both joints in one move. Otherwise, offset more than 25 px: turn the base. Otherwise, for a compact item only (a case, a
    cap: the reader says `compact` and gives its centre row, width and whether the bottom edge cuts
    it off), centre row more than 30 px from y 235: move the hover in or out along the taught blend
    (the tier poses for the distance plus or minus the step); cut off by the bottom edge: 3 cm back
    toward the base. Within all: lined up. One correction per look, in that order.
-3. Wait for the move, look again. At most 4 looks.
+3. Wait for the move (a soft one, see "Smooth motion"), let the joints read still (0.12 s at least,
+   0.3 s at most), look again. At most 4 looks.
 4. A compact item wider than 60 percent of the jaw gap at the present opening: open wider before
    going down (never above 2600 ticks). Then down, close and lift as before.
 
@@ -125,6 +127,9 @@ Constants, measured on the arm on 2026-11-15 with the king size Sharpie (adjust 
 | tolerance | 6 deg, 25 px | `WRIST_AIM["angle_tol_deg"]`, `["offset_tol_px"]` |
 | largest single correction | 500 ticks roll, 80 ticks pan | `WRIST_AIM["max_roll_step"]`, `["max_pan_step"]` |
 | looks | 4 | `WRIST_AIM["rounds"]` |
+| roll and pan together when the turn is at most | 15 deg | `WRIST_AIM["together_deg"]` |
+| correction move time | roll 0.5 s + 1 s per 600 ticks (at most 1.2 s), pan 0.5 s + 1 s per 250 ticks (at most 0.8 s), reach 0.5 s + 1 s per 10 cm (at most 0.8 s); a third ramping up, a third cruising, a third ramping down, acceleration at most 16 | `WRIST_AIM["move_s"]`, `["move_acc_max"]` |
+| wait before a picture | 0.12 to 0.3 s, until two reads 40 ms apart agree to a tick | `WRIST_AIM["settle_min_s"]`, `["settle_s"]` |
 | reach target row (compact items) | y 235 of 360, just above the jaw row (first guess) | `WRIST_AIM["reach_target_y"]` |
 | reach gain | 0.035 cm per px (jaw gap about 220 px for roughly 5 cm; a guess) | `WRIST_AIM["reach_cm_per_px"]` |
 | reach tolerance, largest step | 30 px, 3 cm (also the step back when cut off) | `WRIST_AIM["reach_tol_px"]`, `["max_reach_step_cm"]` |
@@ -164,6 +169,56 @@ Refusals (`not_found`, `out_of_reach`, `not_taught`, `not_graspable`, `nothing_h
  {"skill": "place", "where": "back"}]
 ```
 (the last step only when hand_over said `not_taken`).
+
+## Smooth motion
+
+The house rule on this arm: one goal per joint, with the servo's own speed and acceleration ramp,
+never a goal stepped in small increments from Python. How RealArm keeps to it (`backend/arm/real.py`):
+
+- Every move writes the acceleration register before its goal, and never 0 (0 is no ramp at all).
+  Torque on writes 7 too, so a power cycle never leaves a joint without a ramp.
+- Leg ramps: 7 (x100 ticks/s^2) at pace 1, `7 / stretch` at a slower pace (5 at pace 0.5, 4 at
+  pace 0), so a slow character is the same motion slowed down, never stop and go. With an item in
+  the jaws 0.7 times that (5, 4, 3): the item swings, so speed changes are gentler. Never under 3.
+- Within a leg the fastest arm joint gets that ramp and every other arm joint a softer one in
+  proportion to its speed, so all of them ramp up and down over the same time and finish together
+  (the elbow still leads the shoulder by 30 percent where a leg says so). A joint still on its way
+  to an earlier goal keeps the full ramp so it can slow down in time.
+- Legs with no picture and no grip between them blend: the next goal goes out when every joint is
+  within half its braking distance of the goal (at most 60 ticks, 30 into the final approach over
+  an item), or, sagged short, as soon as it stops creeping. Blended: pick out to the approach
+  (direct, no aim), the missed grip back up to rest, place's turn to above the spot to the set down
+  (direct), the lift clear to the fold home after place and hand_over, rest's lift clear to the
+  fold, wave and gesture rises into their moves, fetch_bottle's tuck, turn back and lowering.
+- Wrist aim corrections: one move per look, roll and pan together when both come from the same
+  picture, slow and soft for a small one (table above).
+- Gestures and the wave are timed single goals per joint (`_timeline`), ramps 5 to 14, reversals
+  only through the servo's own ramp. Each gesture key's speed is chosen so the joint takes the whole
+  gap to its next key (`skills.fill_speed`) instead of arriving early and standing still. The wave
+  folds home 0.6 s after its last goals (the script waited 1.5 s, standing still). They only run as
+  a skill, one skill at a time, never while an item is held.
+- A stop (`stop()`, an error) gives each moving joint a firm ramp (30) and a goal its braking
+  distance ahead, so it stops in a few ticks without swinging back.
+
+Where the arm stops on purpose (the trace marks each one): `look` (overhead or scene picture),
+`look_first` (the pause above the item), `aim` (before each wrist picture), `picture` (the
+fetch_bottle wrist sweep), `settle` (the small push of a final leg that sagged short), `grip`
+(the jaws closing), `release` (the jaws opening on the desk or into a hand), `offer` (waiting for
+the tug), `point` (point, point_at, half_reach holds), `hold` (grip_bottle's hold), `pose`
+(gowther holds its talking pose before its first move).
+
+To see it on the real arm:
+
+    python -m backend.arm.try_real pick place --target bottle --pace 0 --trace run.json
+    python -m backend.arm.trace_report run.json
+
+The trace has every joint's position at about 30 Hz (from the reads the motion loops make anyway,
+plus a read of any joint not read in the last 20 ms), the phases, every goal written and the
+on-purpose marks. The report prints per skill, phase and joint: stops (still at least 0.1 s with
+no new goal: mid-leg), pauses (still between two legs), reversals, peak speed, the longest pause,
+goals and the most goals one leg wrote; then every time the whole arm stood still between two
+motions, as on purpose or UNPLANNED. The simulated bus (`backend/tests/simbus.py`) gives the same
+trace, and `bus.truth` records where the pretend servos really were.
 
 ## Trying it
 

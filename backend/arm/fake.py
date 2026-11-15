@@ -605,21 +605,23 @@ class FakeArm:
             if step["done"]:
                 self._emit(f"aiming {n}: {step['why']}")
                 break
+            moves, words = {}, []
             if step["roll"] is not None:
-                self._emit(f"aiming {n}: {step['why']}, wrist roll {step['d_roll']:+d} to {step['roll']}"
-                           + (" (capped)" if step["capped"] else ""))
-                self._move({5: step["roll"]}, max(W["min_move_s"], abs(step["d_roll"]) / W["roll_speed"]) * stretch)
-            elif step["pan"] is not None and step["d_pan"]:
-                self._emit(f"aiming {n}: {step['why']}, pan {step['d_pan']:+d} to {step['pan']}"
-                           + (" (capped)" if step["capped"] else ""))
-                self._move({1: step["pan"]}, max(W["min_move_s"], abs(step["d_pan"]) / W["pan_speed"]) * stretch)
+                moves[5] = step["roll"]
+                words.append(f"wrist roll {step['d_roll']:+d} to {step['roll']}")
+            if step["pan"] is not None and step["d_pan"]:
+                moves[1] = step["pan"]
+                words.append(f"pan {step['d_pan']:+d} to {step['pan']}")
+            if moves:                   # a small turn and the pan from the same picture go in one move
+                self._emit(f"aiming {n}: {step['why']}, " + ", ".join(words) + (" (capped)" if step["capped"] else ""))
+                self._move(moves, desk.aim_move_s(step["d_roll"], step["d_pan"]) * stretch)
             elif step["reach"] is not None:
                 via, grasp, t = tier.posture(step["reach"])
                 plan.update(dist_cm=step["reach"], via=via, grasp=grasp, t=t)
                 self._emit(f"aiming {n}: {step['why']}, reach {step['d_reach']:+.1f} cm to {step['reach']:.1f}"
                            + (" (capped)" if step["capped"] else ""))
                 self._move({i: via[nm] for i, nm in ((2, "lift"), (3, "elbow"), (4, "wrist_flex"))},
-                           max(W["min_move_s"], abs(step["d_reach"]) / W["reach_speed_cm_s"]) * stretch)
+                           desk.aim_move_s(d_reach_cm=step["d_reach"]) * stretch)
             else:
                 rec["why"] += "; cannot turn further"
                 self._emit(f"aiming {n}: {rec['why']}")

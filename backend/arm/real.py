@@ -31,6 +31,14 @@ SETUP = Path(__file__).resolve().parents[2] / "setup"
 TORQUE_EN, ACCEL, GOAL, SPEED, TORQUE_LIMIT, POSITION, CURRENT = 40, 41, 42, 46, 48, 56, 69
 
 ACC = 7                                   # gentle ramps for the blended legs (x100 ticks/s^2)
+# Smoothness (README "Smooth motion"). Every move writes the acceleration register before its goal;
+# 0 would mean no ramp at all, so nothing here ever writes less than 1.
+LOAD_ACC_SCALE = 0.7                      # an item in the jaws: speed changes this much gentler, it swings
+MIN_LEG_ACC = 3                           # the softest ramp a leg gets (slow pace and loaded)
+STOP_ACC = 30                             # a stop: firm, but not the instant 0, and no lurch back
+BLEND_WIN = 60                            # blended legs hand over this many ticks (at most) before the goal
+APPROACH_WIN = 30                         # into the final approach: a smaller corner over the item
+TRACE_HZ = 30.0                           # try_real --trace sample rate
 TORQUE = {1: 500, 2: 1000, 3: 800, 4: 500, 5: 400, 6: 300}
 CUR_MAX = {1: 800, 2: 1600, 3: 1400, 4: 800, 6: 700}
 LEAD = S.LEAD                             # 0.3, the elbow leads the shoulder
@@ -116,6 +124,9 @@ class RealArm:
         self._cur_max = dict(CUR_MAX)
         self._base_raised = False
         self.trace = collections.deque(maxlen=2000)   # every move, for the simulated-bus tests
+        self._tr = None                       # the motion trace (trace_start), positions at TRACE_HZ
+        self._goal_now = {}                   # the last goal and acceleration written to each joint
+        self._acc_now = {}
         # what pick left in the jaws: _held (the item, as the planner sees it plus the grip), its tier,
         # the jaw position it closed at, and _carry (the arm is in the tucked carry pose with it)
         self._held, self._held_tier, self._held_grip, self._carry = None, None, None, False
@@ -175,6 +186,8 @@ class RealArm:
         for _ in range(6):
             v, c, _ = (h.read1ByteTxRx if n == 1 else h.read2ByteTxRx)(p, i, a)
             if c == scs.COMM_SUCCESS:
+                if a == POSITION and self._tr is not None:
+                    self._tr["seen"][i] = (self._now(), v)    # free trace sample: the read was needed anyway
                 return v
         raise RuntimeError(f"read {i}/{a} failed")
 
@@ -183,8 +196,56 @@ class RealArm:
         for _ in range(6):
             c, _ = (h.write1ByteTxRx if n == 1 else h.write2ByteTxRx)(p, i, a, v)
             if c == scs.COMM_SUCCESS:
+                if a == ACCEL:
+                    self._acc_now[i] = int(v)
+                elif a == GOAL:
+                    self._goal_now[i] = int(v)
+                    if self._tr is not None:
+                        self._tr_event("goal", i, int(v))
                 return
         raise RuntimeError(f"write {i}/{a} failed")
+
+    # motion trace (try_real --trace, backend/arm/trace_report.py)
+    def trace_start(self):
+        """Record every joint's position at about TRACE_HZ, the phases, every goal written and the
+        points where the arm stops on purpose, until trace_stop(). Samples come from the reads the
+        motion loops already make; only joints not read in the last 20 ms are read, between moves'
+        own bus traffic, in the skill thread, so the motion is not disturbed."""
+        self._tr = {"t0": self._now(), "rows": [], "events": [], "last": -1.0, "seen": {}}
+
+    def trace_stop(self):
+        tr, self._tr = self._tr, None
+        if tr is None:
+            return None
+        return {"hz": TRACE_HZ, "t0": tr["t0"], "joints": {str(i): self.names.get(i, str(i)) for i in range(1, 7)},
+                "rows": tr["rows"], "events": tr["events"]}
+
+    def _tr_event(self, kind, *data):
+        tr = self._tr
+        if tr is not None:
+            tr["events"].append([kind, round(self._now() - tr["t0"], 4), *data])
+
+    def _hold(self, why):
+        """Mark a point where the arm stops on purpose (a picture, the jaws closing or opening, the
+        offer, a hold). Only for the trace; trace_report counts any other stop as a jitter."""
+        self._tr_event("hold", why)
+
+    def _tr_tick(self):
+        tr = self._tr
+        if tr is None:
+            return
+        now = self._now()
+        if now - tr["last"] < 1.0 / TRACE_HZ - 1e-6:
+            return
+        tr["last"] = now
+        try:
+            for i in range(1, 7):
+                seen = tr["seen"].get(i)
+                if seen is None or now - seen[0] > 0.02:
+                    self._rd(i, POSITION)
+        except Exception:
+            return                        # a missed sample never stops a skill
+        tr["rows"].append([round(now - tr["t0"], 4)] + [tr["seen"][i][1] for i in range(1, 7)])
 
     def _clamp(self, i, g):
         return max(self.rng[i][0], min(self.rng[i][1], int(g)))
@@ -195,6 +256,7 @@ class RealArm:
         if bad:
             raise RuntimeError(f"joints {bad} read out of range: {start}")
         for i in range(1, 7):
+            self._wr(i, ACCEL, ACC, 1)    # a power cycle leaves it at its default; never start with no ramp
             self._wr(i, GOAL, self._clamp(i, start[i]))
             self._wr(i, TORQUE_LIMIT, TORQUE[i])
         for i in range(1, 7):
@@ -206,6 +268,18 @@ class RealArm:
             raise _Stopped()
 
     def _wait(self, s):
+        if self._tr is not None:          # tracing: keep sampling while the arm waits
+            end = self._now() + max(0.0, s)
+            while True:
+                self._check_stop()
+                self._tr_tick()
+                left = end - self._now()
+                if left <= 0:
+                    return
+                self._wait_plain(min(left, 1.0 / TRACE_HZ))
+        self._wait_plain(s)
+
+    def _wait_plain(self, s):
         if self._virtual:
             self._check_stop()
             self._sleep(max(0.0, s))
@@ -219,33 +293,63 @@ class RealArm:
 
     def _hold_here(self):
         """Hold every arm joint where it is, as grip_bottle.py does on any error. The gripper
-        goal is left alone so a held bottle keeps its squeeze."""
+        goal is left alone so a held bottle keeps its squeeze. A joint still on its way gets a firm
+        ramp (STOP_ACC) and a goal its braking distance on, at most its old goal, so it stops in a
+        few ticks instead of running past the spot on the soft leg ramp and swinging back."""
         for i in (1, 2, 3, 4, 5):
             try:
-                self._wr(i, GOAL, self._clamp(i, self._rd(i, POSITION)))
+                p = self._rd(i, POSITION)
+                try:
+                    g, v = self._rd(i, GOAL), self._rd(i, SPEED)
+                    ahead = min(abs(g - p), v * v / (2 * STOP_ACC * 100.0)) if v > 0 else 0.0
+                    self._wr(i, ACCEL, STOP_ACC, 1)
+                except Exception:
+                    g, ahead = p, 0.0
+                self._wr(i, GOAL, self._clamp(i, p + math.copysign(ahead, g - p)))
             except Exception:
                 pass
 
     # motion, as grip_bottle.py
-    def _blend(self, items, settle=True, tol=60, acc=ACC, poll=0.03, window=None):
-        """items: (id, goal, start_s, duration_s). One motion; each joint runs its own smooth ramp.
+    def _blend(self, items, settle=True, tol=60, acc=ACC, poll=0.03, window=None, early=None, ramp=None):
+        """items: (id, goal, start_s, duration_s). One motion: one goal per joint, the servo's own
+        speed and acceleration ramp does the rest (no stepping in Python).
+        acc: the ramp of the fastest arm joint (x100 ticks/s^2). The other arm joints get a softer
+        one in proportion to their speed, so they all ramp up and down over the same time and the
+        joints of a leg finish together; the gripper keeps acc.
+        ramp: seconds each arm joint ramps up (and down) instead, acc then only caps it.
         tol: how far short a joint may stop and still count as there (fetch_bottle uses 110).
         window: None tests "has it moved 2 ticks" once a loop, as the scripts do. A number tests it
         over at least that many seconds and at least long enough for the slowest commanded joint to
-        cover 4 ticks, so a slow move is not taken for a stall (fetch_bottle)."""
+        cover 4 ticks, so a slow move is not taken for a stall (fetch_bottle).
+        early: blend into the next move. Return as soon as every joint is inside its braking window
+        (half its braking distance, at most this many ticks) instead of waiting for a dead stop, so
+        the next goal arrives while this one is still easing in. Only where no picture or grip comes
+        next."""
         items = [(i, self._clamp(i, g), ts, dur) for i, g, ts, dur in items]
         self.trace.append(("blend", tuple((i, g) for i, g, _, _ in items)))
+        self._tr_event("leg", [[i, g] for i, g, _, _ in items])
         pos = {i: self._rd(i, POSITION) for i, *_ in items}
-        speeds = {}
+        speeds = {i: max(12, round(abs(g - pos[i]) / dur)) for i, g, ts, dur in items}
+        arm = [speeds[i] for i, g, _, _ in items if i != 6 and abs(g - pos[i]) > 2]
+        tau = ramp if ramp is not None else (max(arm) / (acc * 100.0) if arm else None)
+        accs = {}
         for i, g, ts, dur in items:
-            speeds[i] = max(12, round(abs(g - pos[i]) / dur))
-            self._wr(i, ACCEL, acc, 1)
+            # a joint still on its way to an earlier goal (a blended leg, a gesture) may be moving
+            # fast: it keeps the full ramp, or the one it is on if firmer, so it can slow down in time
+            if abs(self._goal_now.get(i, pos[i]) - pos[i]) > 12:
+                accs[i] = max(acc, self._acc_now.get(i, acc))
+            else:
+                accs[i] = acc if i == 6 or not tau else max(1, min(acc, round(speeds[i] / tau / 100.0)))
+            self._wr(i, ACCEL, accs[i], 1)
             self._wr(i, SPEED, speeds[i])
+        win = None
+        if early is not None:
+            win = {i: max(8.0, min(early, 0.25 * speeds[i] ** 2 / (accs[i] * 100.0))) for i in speeds}
         if window is not None:
             moving = [speeds[i] for i, g, _, _ in items if abs(g - pos[i]) > 12]
             window = max(window, 4.0 / min(moving)) if moving else window
         sent, t0, last_move = set(), self._now(), self._now()
-        ref, t_ref = dict(pos), self._now()
+        ref, t_ref, prev = dict(pos), self._now(), dict(pos)
         end = max(ts + dur for _, _, ts, dur in items)
         while True:
             self._check_stop()
@@ -259,16 +363,28 @@ class RealArm:
             self._joints.update(now)
             for i in now:
                 self._check_current(i)
+            self._tr_tick()
             if window is None or self._now() - t_ref >= window - 1e-9:
                 if any(abs(now[i] - ref[i]) > 2 for i in now):
                     last_move = self._now()
                 ref, t_ref = now, self._now()
             done = len(sent) == len(items)
-            if done and all(abs(now[i] - g) <= 12 for i, g, _, _ in items):
+            if done and all(abs(now[i] - g) <= (12 if win is None else max(12, win[i])) for i, g, _, _ in items):
                 return
+            # a blended leg whose joints sagged short goes on as soon as they have come most of the way
+            # (or had most of the leg's time) and stopped creeping (a tick or less since the last read),
+            # not after 0.3 s standing still
+            if done and win is not None and all(
+                    abs(now[i] - g) <= win[i]
+                    or (abs(now[i] - g) <= tol and abs(now[i] - prev[i]) <= 1
+                        and (abs(now[i] - g) <= 0.5 * abs(pos[i] - g) or t > 0.7 * end))
+                    for i, g, _, _ in items):
+                return
+            prev = now
             still = self._now() - last_move
             if done and t > end and still > 0.3 and all(abs(now[i] - g) <= tol for i, g, _, _ in items):
                 if settle:   # sagged a little short under its own weight: one small push, at low speed
+                    self._hold("settle")    # on purpose: only final legs, right before the jaws close or open
                     for i, g, _, _ in items:
                         if i in (2, 3) and abs(g - now[i]) > 8:
                             self._wr(i, SPEED, 60)
@@ -286,6 +402,8 @@ class RealArm:
         miss_below: for a thin item (pick), jaws stopping at or under this count as a miss instead
         of the usual 100 ticks above fully closed."""
         self.trace.append(("close",))
+        self._hold("grip")
+        self._tr_event("leg", [[6, CLOSED]])
         self._wr(6, ACCEL, 10, 1)
         self._wr(6, SPEED, speed)
         self._wr(6, GOAL, CLOSED)
@@ -297,6 +415,7 @@ class RealArm:
                 break
             self._sleep(0.03)
             pos = self._rd(6, POSITION)
+            self._tr_tick()
             if abs(pos - last) > 2:
                 last, t_move = pos, self._now()
             if give_up_s is None and self._now() - t_start > 5:
@@ -309,19 +428,26 @@ class RealArm:
             return pos
         return None
 
-    def _leg_out(self, target, dur, grip=None, settle=True, acc=ACC):
+    def _leg_out(self, target, dur, grip=None, settle=True, acc=ACC, early=None):
         """Rest side to a pose: the elbow runs the whole time, the shoulder starts after LEAD."""
         items = [(3, target[3], 0, dur), (2, target[2], LEAD * dur, (1 - LEAD) * dur),
                  (1, target[1], 0, dur), (4, target[4], 0, dur)]
         if grip is not None:
             items.append((6, grip, 0, min(S.GRIPPER_OPEN_S, dur)))
-        self._blend(items, settle, acc=acc)
+        self._blend(items, settle, acc=acc, early=early)
 
     def _gripper_holding(self):
         g_pos, g_goal = self._rd(6, POSITION), self._rd(6, GOAL)
         if self._held_grip is not None:     # a picked item, maybe a thin one: judged against its own grip
             return g_pos > self._held_grip - 45 and g_goal < g_pos - 40
         return g_pos - CLOSED > MISS_TICKS and g_goal < g_pos - 40
+
+    def _leg_acc(self, k=1.0, loaded=False):
+        """The ramp for a leg of the general skills: ACC at full pace, softer at a slow pace (k is
+        the pace stretch, up to 1.8) so a slow character is the same motion slowed down, and softer
+        again with an item in the jaws. Never under MIN_LEG_ACC."""
+        a = ACC / max(1.0, k) * (LOAD_ACC_SCALE if loaded else 1.0)
+        return max(MIN_LEG_ACC, int(a + 0.5))
 
     def _leg_back(self, dur, roll=None, acc=ACC):
         """Back to rest: all start together, the shoulder gets back early, the elbow finishes the fold.
@@ -356,10 +482,14 @@ class RealArm:
                     self._check_current(i)
                 self._last_cur = self._now()
                 continue
+            if left > 0.03:
+                self._tr_tick()
             self._sleep(min(0.01, left))
 
     def _timeline(self, steps, tail, watch=()):
-        """steps: (time s, id, goal, speed, acc), sorted by time."""
+        """steps: (time s, id, goal, speed, acc), sorted by time. Timed single goals per joint with
+        the servo's own ramp, as gif_thumbnail.py; never stepped in small increments."""
+        self._tr_event("leg", [[i, g] for _, i, g, _, _ in steps])
         t0 = self._now()
         for ts, i, g, sp, acc in steps:
             self._watch_until(t0 + ts, watch)
@@ -369,6 +499,7 @@ class RealArm:
 
     # run
     def _emit(self, name):
+        self._tr_event("phase", name if not name.startswith("aiming") else name.split(":")[0])
         cb = self._emit_cb
         if cb and not self._mute:
             try:
@@ -420,6 +551,7 @@ class RealArm:
             with self._bus:
                 self._stop.clear()
                 self._emit_cb = on_phase
+                self._tr_event("skill", skill)
                 auto = None
                 try:
                     early = self._carry_gate(skill)
@@ -452,6 +584,7 @@ class RealArm:
                 finally:
                     self._mute = False
                     self._emit_cb = None
+                    self._tr_event("end", skill)
         finally:
             self._lock.release()
 
@@ -485,6 +618,7 @@ class RealArm:
         self._emit("start")
         if look_first:
             self._leg_out(self.VIA, S.LOOK_LEG1 * t, grip=self.OPEN)
+            self._hold("look_first")
             self._wait(S.LOOK_PAUSE_S)
             self._leg_out(self.GRASP, S.LOOK_LEG2 * t)
         else:
@@ -499,11 +633,13 @@ class RealArm:
             self._emit("gripped")
             self._blend([(2, self.LIFT, 0, S.lift_time(pace))])
             self._emit("lifted")
+            self._hold("hold")
             if flourish:
                 self._flourish(hold_s)
             else:
                 self._wait(hold_s)
             self._blend([(2, self.GRASP[2], 0, S.lower_time(pace))])
+            self._hold("release")
             self._blend([(6, self.OPEN, 0, 0.6)], settle=False)
             self._wait(0.2)
             self._emit("put_back")
@@ -527,6 +663,7 @@ class RealArm:
         self._emit("start")
         self._leg_out(self.VIA, leg)
         self._emit("at_target")
+        self._hold("point")
         self._wait(S.POINT_HOLD_S)
         self._emit("returning")
         self._leg_back(leg)
@@ -538,6 +675,7 @@ class RealArm:
         self._emit("start")
         self._leg_out(self.HALF, leg)
         self._emit("at_target")
+        self._hold("point")
         self._wait(S.HALF_HOLD_S)
         self._emit("returning")
         self._leg_back(leg)
@@ -546,9 +684,11 @@ class RealArm:
 
     def _skill_wave(self):
         self._emit("start")
-        self._leg_out(PHOTO, S.WAVE_LEG_S, grip=PHOTO_GRIP)
+        # blend straight into the wave: no settle push and no stop at the photo pose. The wave is
+        # centred on the pose it was sent to, not on where the joints happen to be as it starts.
+        self._leg_out(PHOTO, S.WAVE_LEG_S, grip=PHOTO_GRIP, settle=False, early=BLEND_WIN)
         self._emit("at_target")
-        s = {i: self._rd(i, POSITION) for i in (1, 3, 4, 5, 6)}
+        s = {1: PHOTO[1], 3: PHOTO[3], 4: PHOTO[4], 5: self._rd(5, POSITION), 6: PHOTO_GRIP}
         sh, op = WAVE_SHUT, WAVE_OPEN
         steps = [  # time s, joint, goal, speed: gif_thumbnail.py, unchanged
             (0.0, 1, s[1] + 250, 520), (0.0, 5, s[5] + 500, 950), (0.0, 4, s[4] - 150, 380), (0.0, 3, s[3] - 120, 320), (0.1, 6, sh, 900),
@@ -561,7 +701,9 @@ class RealArm:
             (3.8, 6, op, 900),
             (4.0, 1, s[1], 400), (4.0, 5, s[5], 900), (4.0, 4, s[4], 300), (4.0, 3, s[3], 300), (4.5, 6, s[6], 600),
         ]
-        self._timeline([(ts, i, g, sp, 12) for ts, i, g, sp in steps], tail=1.5, watch=(1, 3, 4))
+        # tail: the script waited 1.5 s after the last goals; 0.6 s lets the fold home start as they
+        # finish instead of after the arm has stood still for half a second
+        self._timeline([(ts, i, g, sp, 12) for ts, i, g, sp in steps], tail=0.6, watch=(1, 3, 4))
         self._emit("returning")
         self._leg_back(S.WAVE_LEG_S, roll=s[5])
         self._emit("done")
@@ -586,7 +728,8 @@ class RealArm:
             holding = False
         else:
             if not at_rest and self._rd(6, POSITION) > CLOSED + 150 and pos[2] > self.REST[2] + 300:
-                self._blend([(2, pos[2] - 200, 0, 1.0)], settle=False)
+                # lift clear, flowing straight into the fold home (no stop between)
+                self._blend([(2, pos[2] - 200, 0, 1.0)], settle=False, early=BLEND_WIN)
             self._emit("returning")
             holding = self._leg_back(S.REST_LEG_S)
         self._restore_base_torque()
@@ -610,13 +753,16 @@ class RealArm:
     def _skill_gesture(self, style, seconds):
         g = S.gesture_plan(style, seconds, self.REST)
         self._emit("start")
-        self._leg_out(g["pose"], g["rise_cmd"], grip=g["grip"], settle=False, acc=g["acc"])
+        # the rise flows into the talking moves (they are offsets from the pose it was sent to)
+        self._leg_out(g["pose"], g["rise_cmd"], grip=g["grip"], settle=False, acc=g["acc"], early=BLEND_WIN)
         self._emit("at_target")
         base = dict(g["pose"])
         base[5] = self._rd(5, POSITION)
         base[6] = g["grip"]
         steps = S.gesture_steps(style, g["talk_s"], base, g["flex_anchor"], self.REST)
         tail = max(0.0, g["talk_s"] - (steps[-1][0] if steps else 0.0))
+        if steps and steps[0][0] > 0.3:
+            self._hold("pose")       # this character holds the talking pose before its first move (gowther)
         self._timeline(steps, tail=tail, watch=(1, 2, 3, 4))
         self._emit("returning")
         self._leg_back(g["back_cmd"], roll=base[5], acc=g["acc"])
@@ -631,23 +777,24 @@ class RealArm:
             self._vision = Vision(self.setup_dir)
         return self._vision
 
-    def _fblend(self, items, settle=True):
+    def _fblend(self, items, settle=True, acc=ACC, early=None):
         """blend() as fetch_bottle.py has it: 110 tick tolerance, quicker arrival checks."""
-        self._blend(items, settle, tol=FETCH_TOL, poll=FETCH_POLL, window=MOVE_WINDOW)
+        self._blend(items, settle, tol=FETCH_TOL, acc=acc, poll=FETCH_POLL, window=MOVE_WINDOW, early=early)
 
     def _three(self, pose, dur):
         return [(2, pose["lift"], 0, dur), (3, pose["elbow"], 0, dur), (4, pose["wrist_flex"], 0, dur)]
 
-    def _fetch_back_to_rest(self, k):
+    def _fetch_back_to_rest(self, k, acc=ACC):
         """back_to_rest() from the script: one move, the gripper closes in the last 40 percent."""
         d = S.FETCH_REST_S * k
         self._fblend([(3, self.REST[3], 0, d), (2, self.REST[2], 0, (1 - LEAD) * d), (1, self.REST[1], 0, d),
-                      (4, self.REST[4], 0, d), (6, CLOSED, 0.6 * d, 0.4 * d)], settle=False)
+                      (4, self.REST[4], 0, d), (6, CLOSED, 0.6 * d, 0.4 * d)], settle=False, acc=acc)
 
     def _put_down_here(self, k, tier=None):
         """The script's recovery when the turn cannot finish: hold, pull in to the tuck, stand the
         bottle on the table where the arm is, let go and lift clear. The caller then folds back.
-        tier: an item picked with another tier's grips is set down with that tier's poses."""
+        tier: an item picked with another tier's grips is set down with that tier's poses.
+        Loaded legs use the gentle loaded ramp and flow into each other down to the table."""
         for i in (1, 2, 3, 4):
             self._wr(i, GOAL, self._clamp(i, self._rd(i, POSITION)))
         if tier is None or tier.name == "tall":
@@ -656,14 +803,17 @@ class RealArm:
             opened = FETCH_OPEN
         else:
             tuck, mid, table, opened = tier.tuck(), tier.base_grasp(), tier.table_lift(), tier.open
-        self._fblend(self._three(tuck, S.RECOVER_TUCK_S * k), settle=False)
-        self._fblend([(3, mid["elbow"], 0, S.RECOVER_ALIGN_S * k), (4, mid["wrist_flex"], 0, S.RECOVER_ALIGN_S * k)], settle=False)
-        self._fblend([(2, table, 0, S.RECOVER_TABLE_S * k)])
+        held = self._leg_acc(k, loaded=True)
+        self._fblend(self._three(tuck, S.RECOVER_TUCK_S * k), settle=False, acc=held, early=BLEND_WIN)
+        self._fblend([(3, mid["elbow"], 0, S.RECOVER_ALIGN_S * k), (4, mid["wrist_flex"], 0, S.RECOVER_ALIGN_S * k)],
+                     settle=False, acc=held, early=BLEND_WIN)
+        self._fblend([(2, table, 0, S.RECOVER_TABLE_S * k)], acc=held)
+        self._hold("release")
         self._fblend([(6, opened, 0, S.FETCH_RELEASE_S)], settle=False)
         self._forget_held()
         self._emit("put_back")
         self._wait(S.FETCH_AFTER_OPEN_S)
-        self._fblend([(2, table - 220, 0, S.RECOVER_CLEAR_S * k)], settle=False)
+        self._fblend([(2, table - 220, 0, S.RECOVER_CLEAR_S * k)], settle=False, early=BLEND_WIN)
 
     def _raise_base_torque(self):
         self._wr(1, TORQUE_LIMIT, FETCH_BASE_TORQUE)
@@ -689,9 +839,11 @@ class RealArm:
         self._check_stop()
         th = threading.Thread(target=go, daemon=True)
         th.start()
+        self._hold("look")
         while th.is_alive():
             th.join(0.05)
             self._check_stop()
+            self._tr_tick()
         self._check_stop()
         if "e" in box:
             raise box["e"]
@@ -742,6 +894,7 @@ class RealArm:
             pan = int(max(lo, min(hi, self.table.pan_for_bearing(math.radians(deg)))))
             here = self._rd(1, POSITION)
             self._fblend([(1, pan, 0, max(1.0, abs(pan - here) / 300.0) * k)], settle=False)
+            self._hold("picture")
             self._wait(0.3)       # let the picture settle
             look = self._wrist_ask(pan)
             asked += 1
@@ -768,6 +921,7 @@ class RealArm:
             target = int(max(lo, min(hi, here + step)))
             if abs(target - here) > 4:
                 self._fblend([(1, target, 0, max(0.8, abs(target - here) / 250.0) * k)], settle=False)
+                self._hold("picture")
                 self._wait(0.3)
             look = self._wrist_ask(target)
             if not look or not look.get("picture") or not look.get("bottle"):
@@ -804,6 +958,7 @@ class RealArm:
     def _wait_for_take(self, seconds, watcher):
         """'tug' when the bottle is pulled, 'hand' when the wrist camera sees a hand, None when time is up."""
         self.trace.append(("offer", seconds))
+        self._hold("offer")
         self._wait(S.FETCH_OFFER_SETTLE_S)
         ids = (1, 2, 3, 4, 6)
         ref = {i: self._rd(i, POSITION) for i in ids}
@@ -816,6 +971,7 @@ class RealArm:
             if any(abs(now[i] - ref[i]) > (TUG_TICKS if i != 6 else TUG_TICKS_GRIP) for i in ids):
                 return "tug"
             if watcher is not None and getattr(watcher, "hand", False):
+                self._wait(0.5)     # give the hand a moment to close on it before the jaws open
                 return "hand"
         return None
 
@@ -853,19 +1009,23 @@ class RealArm:
         far, tuck = T.far_grasp(), T.tuck()
         self._beep(1200, 300)
         # out to just above the cap in one move, then the short final approach
+        held = self._leg_acc(k, loaded=True)     # the bottle in the jaws: gentler speed changes
         t_out = S.FETCH_OUT_S * k
         self._fblend([(3, via["elbow"], 0, t_out), (2, via["lift"], LEAD * t_out, (1 - LEAD) * t_out),
                       (1, pan_b, 0, t_out), (4, via["wrist_flex"], 0, t_out),
-                      (6, FETCH_OPEN, 0, min(S.FETCH_OPEN_S, t_out))], settle=False)
+                      (6, FETCH_OPEN, 0, min(S.FETCH_OPEN_S, t_out))], settle=False,
+                     early=None if look_first else APPROACH_WIN)
         if look_first:
+            self._hold("look_first")
             self._wait(S.FETCH_LOOK_FIRST_S)
         self._fblend(self._three(grasp, S.FETCH_APPROACH_S * k))
         self._emit("at_target")
         grip = self._close_gripper(speed=FETCH_CLOSE_SPEED, give_up_s=5.0)
         if grip is None:
             self._emit("missed")
+            self._hold("release")
             self._fblend([(6, FETCH_OPEN, 0, S.FETCH_RELEASE_S)], settle=False)
-            self._fblend(self._three(via, S.FETCH_VIA_S * k), settle=False)
+            self._fblend(self._three(via, S.FETCH_VIA_S * k), settle=False, early=BLEND_WIN)
             self._emit("returning")
             self._fetch_back_to_rest(k)
             self._restore_base_torque()
@@ -874,7 +1034,7 @@ class RealArm:
         self._emit("gripped")
         plan["note"] = f"gripped at {grip}. {plan['note']}"
         # lift and pull the bottle in close in one move: the base joint cannot swing a loaded arm held far out
-        self._fblend(self._three(tuck, S.FETCH_TUCK_S * k), settle=False)
+        self._fblend(self._three(tuck, S.FETCH_TUCK_S * k), settle=False, acc=held)
         if not self._still_holding(grip):
             return self._lost_the_bottle(k, plan, "during the lift")
         self._emit("lifted")
@@ -891,7 +1051,8 @@ class RealArm:
             try:
                 # turn toward the person and start reaching out during the last part of the turn
                 self._fblend([(1, pan_p, 0, turn), (2, far["lift"] - 120, 0.5 * turn, reach),
-                              (3, far["elbow"], 0.5 * turn, reach), (4, far["wrist_flex"], 0.5 * turn, reach)], settle=False)
+                              (3, far["elbow"], 0.5 * turn, reach), (4, far["wrist_flex"], 0.5 * turn, reach)],
+                             settle=False, acc=held)
             except RuntimeError as e:
                 # could not finish the turn (too heavy, or something in the way): stand the bottle down here
                 at = self._rd(1, POSITION)
@@ -913,22 +1074,26 @@ class RealArm:
                 watcher.stop()
         checks = getattr(watcher, "checks", 0) if watcher is not None else 0
         if took:
+            self._hold("release")
             self._fblend([(6, FETCH_OPEN, 0, S.FETCH_HANDOVER_OPEN_S)], settle=False)
             self._emit("handed_over")
             self._wait(S.FETCH_HANDOVER_WAIT_S)
-            self._fblend([(2, far["lift"] - 300, 0, S.FETCH_CLEAR_S * k)], settle=False)   # lift clear of the hand
+            self._fblend([(2, far["lift"] - 300, 0, S.FETCH_CLEAR_S * k)], settle=False,
+                         early=BLEND_WIN)   # lift clear of the hand, flowing into the fold home
             res, detail = "handed_over", f"handed over ({took}, {checks} hand checks). {plan['note']}"
         else:
-            self._fblend(self._three(tuck, S.FETCH_TUCK_S * k), settle=False)
-            self._fblend([(1, pan_b, 0, turn)], settle=False)
+            # tuck, turn back and down above the spot flow into each other; it stops only to stand it down
+            self._fblend(self._three(tuck, S.FETCH_TUCK_S * k), settle=False, acc=held, early=BLEND_WIN)
+            self._fblend([(1, pan_b, 0, turn)], settle=False, acc=held, early=BLEND_WIN)
             self._fblend([(2, grasp["lift"] - LIFT_UP, 0, S.FETCH_ABOVE_SPOT_S * k),
                           (3, grasp["elbow"], 0, S.FETCH_ABOVE_SPOT_S * k),
-                          (4, grasp["wrist_flex"], 0, S.FETCH_ABOVE_SPOT_S * k)], settle=False)
-            self._fblend([(2, grasp["lift"], 0, S.FETCH_SET_S * k)])
+                          (4, grasp["wrist_flex"], 0, S.FETCH_ABOVE_SPOT_S * k)], settle=False, acc=held, early=BLEND_WIN)
+            self._fblend([(2, grasp["lift"], 0, S.FETCH_SET_S * k)], acc=held)
+            self._hold("release")
             self._fblend([(6, FETCH_OPEN, 0, S.FETCH_RELEASE_S)], settle=False)
             self._emit("put_back")
             self._wait(S.FETCH_AFTER_OPEN_S)
-            self._fblend(self._three(via, S.FETCH_VIA_S * k), settle=False)
+            self._fblend(self._three(via, S.FETCH_VIA_S * k), settle=False, early=BLEND_WIN)
             res, detail = "put_back", f"nobody took it in {wait_s:g} s ({checks} hand checks); put it back. {plan['note']}"
         self._emit("returning")
         self._fetch_back_to_rest(k)
@@ -1026,12 +1191,14 @@ class RealArm:
         pose = {1: int(item["pan"]), 2: via["lift"] - S.POINT_AT_RAISE, 3: via["elbow"], 4: via["wrist_flex"]}
         self._beep(1200, 300)
         t_out = S.FETCH_OUT_S * k
+        acc = self._leg_acc(k)
         self._fblend([(3, pose[3], 0, t_out), (2, pose[2], LEAD * t_out, (1 - LEAD) * t_out), (1, pose[1], 0, t_out),
-                      (4, pose[4], 0, t_out)], settle=False)
+                      (4, pose[4], 0, t_out)], settle=False, acc=acc)
         self._emit("at_target")
+        self._hold("point")
         self._wait(S.POINT_AT_HOLD_S)
         self._emit("returning")
-        self._fetch_back_to_rest(k)
+        self._fetch_back_to_rest(k, acc)
         self._emit("done")
         return "done", f"pointed at the {item['name']}, {item['dist_cm']:.0f} cm away", {"target": public(item)}
 
@@ -1054,15 +1221,19 @@ class RealArm:
         self._raise_base_torque()
         self._beep(1200, 300)
         t_out = S.FETCH_OUT_S * k
+        acc, held = self._leg_acc(k), self._leg_acc(k, loaded=True)
         out = [(3, via["elbow"], 0, t_out), (2, via["lift"], LEAD * t_out, (1 - LEAD) * t_out), (1, pan, 0, t_out),
                (4, via["wrist_flex"], 0, t_out), (6, tier.open, 0, min(S.FETCH_OPEN_S, t_out))]
         if roll is not None:
             out.append((5, roll, 0, t_out))
-        self._fblend(out, settle=False)
+        aims = tier.name in desk.aim_tiers(self.aim_setting)
+        # straight on down when nothing is looked at above the item: the hover flows into the approach
+        self._fblend(out, settle=False, acc=acc, early=None if aims or approach == "look_first" else APPROACH_WIN)
         if approach == "look_first":
+            self._hold("look_first")
             self._wait(S.FETCH_LOOK_FIRST_S)
         aim = []
-        if tier.name in desk.aim_tiers(self.aim_setting):
+        if aims:
             aim = self._aim_with_wrist(name, plan, k)
             via, grasp = plan["via"], plan["grasp"]      # moved in or out for a compact item
         opened = next((r["opened"] for r in aim if r.get("opened")), None)
@@ -1070,7 +1241,7 @@ class RealArm:
         if aim:
             note += ". " + desk.aim_words(aim)
         aim_extra = {"aim": aim} if aim else {}
-        self._fblend(self._three(grasp, S.FETCH_APPROACH_S * k))
+        self._fblend(self._three(grasp, S.FETCH_APPROACH_S * k), acc=acc)
         self._emit("at_target")
         self._held_tier = tier
         # the thin item rule (jaws stopping near the taught pen grip count as empty) is only for long
@@ -1081,18 +1252,19 @@ class RealArm:
         if grip is None:
             self._forget_held()
             self._emit("missed")
+            self._hold("release")
             self._fblend([(6, tier.open, 0, S.FETCH_RELEASE_S)], settle=False)
             back = self._three(via, S.FETCH_VIA_S * k) + ([(5, roll_home, 0, S.FETCH_VIA_S * k)] if rolled else [])
-            self._fblend(back, settle=False)
+            self._fblend(back, settle=False, acc=acc, early=BLEND_WIN)
             self._emit("returning")
-            self._fetch_back_to_rest(k)
+            self._fetch_back_to_rest(k, acc)
             self._restore_base_torque()
             self._emit("done")
             return "missed", f"the gripper closed on nothing. {note}", aim_extra
         self._held_grip = grip
         self._emit("gripped")
         carry = tier.carry(lift_cm_style)
-        self._fblend(self._three(carry, S.FETCH_TUCK_S * k), settle=False)
+        self._fblend(self._three(carry, S.FETCH_TUCK_S * k), settle=False, acc=held)
         if not self._still_holding(grip):
             return self._lost_the_bottle(k, {"note": note}, "during the lift", what=f"the {name}")
         self._emit("lifted")
@@ -1125,7 +1297,7 @@ class RealArm:
         self.trace.append(("wrist_aim",))
         try:
             for n in range(1, W["rounds"] + 1):
-                self._wait(W["settle_s"])
+                self._settle_for_picture(W["settle_min_s"], W["settle_s"])
                 reading, why = self._wrist_aim_look(name, n)
                 if reading is None:
                     rounds.append({"round": n, "unread": True, "why": why})
@@ -1146,24 +1318,24 @@ class RealArm:
                 if step["done"]:
                     self._emit(f"aiming {n}: {step['why']}")
                     break
+                moves, words = {}, []
                 if step["roll"] is not None:
-                    self._emit(f"aiming {n}: {step['why']}, wrist roll {step['d_roll']:+d} to {step['roll']}"
-                               + (" (capped)" if step["capped"] else ""))
-                    dur = max(W["min_move_s"], abs(step["d_roll"]) / W["roll_speed"]) * stretch
-                    self._fblend([(5, step["roll"], 0, dur)], settle=False)
-                elif step["pan"] is not None and step["d_pan"]:
-                    self._emit(f"aiming {n}: {step['why']}, pan {step['d_pan']:+d} to {step['pan']}"
-                               + (" (capped)" if step["capped"] else ""))
-                    dur = max(W["min_move_s"], abs(step["d_pan"]) / W["pan_speed"]) * stretch
-                    self._fblend([(1, step["pan"], 0, dur)], settle=False)
+                    moves[5] = step["roll"]
+                    words.append(f"wrist roll {step['d_roll']:+d} to {step['roll']}")
+                if step["pan"] is not None and step["d_pan"]:
+                    moves[1] = step["pan"]
+                    words.append(f"pan {step['d_pan']:+d} to {step['pan']}")
+                if moves:                   # a small turn and the pan from the same picture go in one move
+                    self._emit(f"aiming {n}: {step['why']}, " + ", ".join(words) + (" (capped)" if step["capped"] else ""))
+                    self._aim_move(moves, desk.aim_move_s(step["d_roll"], step["d_pan"]) * stretch)
                 elif step["reach"] is not None:
                     dist_cm = step["reach"]
                     via, grasp, t = tier.posture(dist_cm)
                     plan.update(dist_cm=dist_cm, via=via, grasp=grasp, t=t)
                     self._emit(f"aiming {n}: {step['why']}, reach {step['d_reach']:+.1f} cm to {dist_cm:.1f}"
                                + (" (capped)" if step["capped"] else ""))
-                    dur = max(W["min_move_s"], abs(step["d_reach"]) / W["reach_speed_cm_s"]) * stretch
-                    self._fblend(self._three(via, dur), settle=False)
+                    self._aim_move({2: via["lift"], 3: via["elbow"], 4: via["wrist_flex"]},
+                                   desk.aim_move_s(d_reach_cm=step["d_reach"]) * stretch)
                 else:
                     rec["why"] += "; cannot turn further"
                     self._emit(f"aiming {n}: {rec['why']}")
@@ -1181,6 +1353,29 @@ class RealArm:
             except Exception:
                 pass
         return rounds
+
+    def _aim_move(self, goals, move_s):
+        """One small correction (wrist roll, pan, or lift, elbow and flex for the reach), all its
+        joints in one move over move_s seconds: each ramps up for a third, cruises for a third and
+        ramps down for a third, so they start and finish together and a 40 tick pan is a slow, soft
+        nudge rather than a twitch at the leg speed."""
+        T = max(0.3, move_s)
+        self._blend([(i, g, 0, 2 * T / 3) for i, g in goals.items()], False, tol=FETCH_TOL,
+                    acc=desk.WRIST_AIM["move_acc_max"], poll=FETCH_POLL, window=MOVE_WINDOW, ramp=T / 3)
+
+    def _settle_for_picture(self, min_s, max_s, joints=(1, 2, 3, 4, 5)):
+        """Wait before a wrist picture: at least min_s, then until two reads 40 ms apart agree to a
+        tick, never longer than max_s. A soft stop leaves little to wait for."""
+        self._hold("aim")
+        t0 = self._now()
+        self._wait(min_s)
+        last = {i: self._rd(i, POSITION) for i in joints}
+        while self._now() - t0 < max_s:
+            self._wait(0.04)
+            now = {i: self._rd(i, POSITION) for i in joints}
+            if all(abs(now[i] - last[i]) <= 1 for i in joints):
+                return
+            last = now
 
     def _wrist_aim_look(self, name, n):
         """(reading, None) or (None, why not)."""
@@ -1239,26 +1434,32 @@ class RealArm:
         via, grasp, _ = tier.posture(spot["dist_cm"])
         pan = int(spot["pan"])
         turn = S.fetch_turn_s(self._rd(1, POSITION), pan, pace)
+        acc, held = self._leg_acc(k), self._leg_acc(k, loaded=True)
         self._emit("carrying")
+        # loaded: gentle ramps, and turn, down above the spot and (direct) down onto it flow into each other
         try:
-            self._fblend([(1, pan, 0, turn)], settle=False)      # loaded turn in the carry pose, as fetch's put back
+            # loaded turn in the carry pose, as fetch's put back
+            self._fblend([(1, pan, 0, turn)], settle=False, acc=held, early=BLEND_WIN)
         except RuntimeError as e:
             return self._turn_failed(k, e, tier, name)
         self._fblend([(2, grasp["lift"] - LIFT_UP, 0, S.FETCH_ABOVE_SPOT_S * k), (3, grasp["elbow"], 0, S.FETCH_ABOVE_SPOT_S * k),
-                      (4, grasp["wrist_flex"], 0, S.FETCH_ABOVE_SPOT_S * k)], settle=False)
+                      (4, grasp["wrist_flex"], 0, S.FETCH_ABOVE_SPOT_S * k)], settle=False, acc=held,
+                     early=None if approach == "look_first" else BLEND_WIN)
         if approach == "look_first":
+            self._hold("look_first")
             self._wait(S.FETCH_LOOK_FIRST_S)
-        self._fblend([(2, grasp["lift"], 0, S.FETCH_SET_S * k)])
+        self._fblend([(2, grasp["lift"], 0, S.FETCH_SET_S * k)], acc=held)
         self._emit("at_target")
+        self._hold("release")
         self._fblend([(6, tier.open, 0, S.FETCH_RELEASE_S)], settle=False)
         roll_home = H.get("roll_home")
         self._forget_held()
         self._emit("put_back")
         self._wait(S.FETCH_AFTER_OPEN_S)
         clear = self._three(via, S.FETCH_VIA_S * k) + ([(5, roll_home, 0, S.FETCH_VIA_S * k)] if roll_home is not None else [])
-        self._fblend(clear, settle=False)
+        self._fblend(clear, settle=False, acc=acc, early=BLEND_WIN)
         self._emit("returning")
-        self._fetch_back_to_rest(k)
+        self._fetch_back_to_rest(k, acc)
         self._restore_base_torque()
         self._emit("done")
         return "placed", f"put the {name} down {words}, {spot['dist_cm']:.0f} cm from the arm", \
@@ -1285,6 +1486,7 @@ class RealArm:
         self._emit("seen")
         far = self.taught.far_grasp()          # held out at full reach: fetch_bottle's offer pose
         turn = S.fetch_turn_s(self._rd(1, POSITION), pan_p, pace)
+        acc, held = self._leg_acc(k), self._leg_acc(k, loaded=True)
         try:
             watcher = self.vision.hand_watcher()
         except Exception:
@@ -1295,7 +1497,8 @@ class RealArm:
             reach = S.FETCH_REACH_S * k
             try:
                 self._fblend([(1, pan_p, 0, turn), (2, far["lift"] - 120, 0.5 * turn, reach),
-                              (3, far["elbow"], 0.5 * turn, reach), (4, far["wrist_flex"], 0.5 * turn, reach)], settle=False)
+                              (3, far["elbow"], 0.5 * turn, reach), (4, far["wrist_flex"], 0.5 * turn, reach)],
+                             settle=False, acc=held)
             except RuntimeError as e:
                 return self._turn_failed(k, e, tier, name)
             if not self._still_holding(grip):
@@ -1309,17 +1512,18 @@ class RealArm:
                 watcher.stop()
         checks = getattr(watcher, "checks", 0) if watcher is not None else 0
         if took:
+            self._hold("release")
             self._fblend([(6, tier.open, 0, S.FETCH_HANDOVER_OPEN_S)], settle=False)
             self._forget_held()
             self._emit("handed_over")
             self._wait(S.FETCH_HANDOVER_WAIT_S)
-            self._fblend([(2, far["lift"] - 300, 0, S.FETCH_CLEAR_S * k)], settle=False)
+            self._fblend([(2, far["lift"] - 300, 0, S.FETCH_CLEAR_S * k)], settle=False, acc=acc, early=BLEND_WIN)
             self._emit("returning")
-            self._fetch_back_to_rest(k)
+            self._fetch_back_to_rest(k, acc)
             self._restore_base_torque()
             self._emit("done")
             return "handed_over", f"handed over the {name} ({took}, {checks} hand checks) at pan {pan_p} ({pnote})"
-        self._fblend(self._three(H["carry"], S.FETCH_TUCK_S * k), settle=False)
+        self._fblend(self._three(H["carry"], S.FETCH_TUCK_S * k), settle=False, acc=held)
         if not self._still_holding(grip):
             return self._slipped(k, name)
         self._carry = True

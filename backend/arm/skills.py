@@ -471,6 +471,20 @@ def gesture_clamp(j, g, flex_anchor, rest=None):
     return int(max(lo, min(hi, round(g))))
 
 
+def fill_speed(d, gap, acc):
+    """Cruise speed (ticks/s) for a move of d ticks to take the whole gap with the servo's ramp at
+    acc, so a joint arrives as its next key starts instead of arriving early and standing still
+    (stop and go). Too short a gap even for a pure ramp up and down: as fast as it can, the next
+    key then turns it round on its ramp before it gets there."""
+    a = max(1, acc) * 100.0
+    disc = (a * gap) ** 2 - 4 * a * d
+    if d <= 0:
+        return 0
+    if disc < 0:
+        return round(d / (0.8 * gap))       # it never gets there anyway: the old speed, so the swing stays as big
+    return round((a * gap - math.sqrt(disc)) / 2)
+
+
 def gesture_steps(style, talk_s, base, flex_anchor, rest=None):
     """Timeline for the talking part: list of (time s, joint, goal, speed, acc), sorted by time.
     base: {joint: value at the talking pose} for joints 1 to 6. Ends with every moved joint back at base."""
@@ -493,7 +507,7 @@ def gesture_steps(style, talk_s, base, flex_anchor, rest=None):
     for k, (t, j, g) in enumerate(raw):
         nxt = next((t2 for t2, j2, _ in raw[k + 1:] if j2 == j and t2 > t), talk_s)
         gap = max(0.1, nxt - t)
-        speed = round(abs(g - prev[j]) / (0.8 * gap))
+        speed = fill_speed(abs(g - prev[j]), gap, st["acc"])
         speed = max(40, min(st["vmax"].get(j, 400), speed))
         steps.append((round(t, 3), j, g, speed, st["acc"]))
         prev[j] = g

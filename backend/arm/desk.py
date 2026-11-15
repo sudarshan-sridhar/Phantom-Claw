@@ -60,15 +60,19 @@ WRIST_AIM = {
     "pan_sign": 1,               # pan_new = pan_now + pan_sign * offset_px / gain
     "max_roll_step": 500,        # ticks in one correction, never more
     "max_pan_step": 80,
-    "settle_s": 0.3,             # wait after a move before the next picture
-    "roll_speed": 900,           # ticks per second for the correction moves (pace stretches them a little)
-    "pan_speed": 150,
-    "min_move_s": 0.4,
+    "settle_s": 0.3,             # longest wait after a move before the next picture
+    "settle_min_s": 0.12,        # shortest one: then the picture is taken as soon as the joints read still
+    "together_deg": 15.0,        # a turn this small barely moves the picture: the pan from the same picture goes with it
+    # correction move time, seconds: (shortest, units per extra second, longest), roll and pan in ticks,
+    # reach in cm. A small correction is slow and soft instead of a twitch at full speed; pace stretches
+    # them a little. RealArm gives every joint of the move the same ramp, so they start and stop together.
+    "move_s": {"roll": (0.5, 600.0, 1.2), "pan": (0.5, 250.0, 0.8), "reach": (0.5, 10.0, 0.8)},
+    "move_acc_max": 16,          # acceleration register cap for those moves (x100 ticks/s^2)
+    "min_move_s": 0.4,           # the jaw opening move
     "reach_target_y": 235.0,     # a compact item's centre row should sit here (first guess)
     "reach_cm_per_px": 0.035,    # cm of reach per px of that row (first guess, from the jaw gap)
     "reach_tol_px": 30.0,        # within this, the reach is left alone
     "max_reach_step_cm": 3.0,    # cm in one correction, never more; also the step back when cut off
-    "reach_speed_cm_s": 4.0,     # for the reach correction move
     "wide_ratio": 0.6,           # wider than this share of the jaw gap: open wider before going down
     "open_margin_ticks": 120,    # extra opening on top of the item's width (about 60 px)
     "open_max": 2600,            # never open further than this
@@ -77,9 +81,11 @@ WRIST_AIM = {
 
 def aim_step(reading, roll_now, pan_now, dist_cm=None, cfg=WRIST_AIM, roll_range=ROLL_RANGE, pan_range=None,
              reach_range=None):
-    """What one wrist reading asks for. The roll is corrected first and alone, since turning the
-    wrist turns the picture: the pan is only corrected once the angle is within tolerance (or the
-    item is round), and the reach (compact items only) once both are. Returns {"done", "roll",
+    """What one wrist reading asks for. The roll is corrected first, since turning the wrist turns
+    the picture: the pan is only corrected once the angle is within tolerance (or the item is round),
+    except that a small turn (together_deg or less) barely moves the picture, so the pan read from the
+    same picture goes with it in one move. The reach (compact items only) comes once both are lined
+    up. Returns {"done", "roll",
     "pan", "reach", "d_roll", "d_pan", "d_reach", "capped", "why"}; roll and pan are the new
     goals and reach the new distance in cm, or None when that stays."""
     out = {"done": False, "roll": None, "pan": None, "reach": None, "d_roll": 0, "d_pan": 0, "d_reach": 0.0,
@@ -95,20 +101,25 @@ def aim_step(reading, roll_now, pan_now, dist_cm=None, cfg=WRIST_AIM, roll_range
         new = max(roll_range[0], min(roll_range[1], new))
         if new != int(roll_now):
             out.update(roll=new, d_roll=new - int(roll_now), why=f"turned {ang:+.0f} deg from the jaws")
-            return out
-        out["capped"] = False           # the wrist is at its limit: go on to the pan
+            if not (offset_off and abs(ang) <= cfg.get("together_deg", 0.0)):
+                return out
+        else:
+            out["capped"] = False       # the wrist is at its limit: go on to the pan
     if offset_off:
         gain = cfg["pan_px_per_tick"]
         if cfg.get("pan_gain_scales") and dist_cm:
             gain *= max(0.4, min(2.5, dist_cm / cfg["pan_gain_ref_cm"]))
         want = cfg["pan_sign"] * off / gain
         step = max(-cfg["max_pan_step"], min(cfg["max_pan_step"], want))
-        out["capped"] = abs(step) < abs(want) - 0.5
+        capped = abs(step) < abs(want) - 0.5
         new = int(round(pan_now + step))
         if pan_range is not None:
             new = max(pan_range[0], min(pan_range[1], new))
         side = "left" if off < 0 else "right"
-        out.update(pan=new, d_pan=new - int(pan_now), why=f"{abs(off):.0f} px {side} of the jaw centre")
+        why = f"{abs(off):.0f} px {side} of the jaw centre"
+        if out["roll"] is not None:     # a small turn and the pan together
+            why, capped = f"{out['why']} and {why}", capped or out["capped"]
+        out.update(pan=new, d_pan=new - int(pan_now), why=why, capped=capped)
         return out
     out["capped"] = False
     reach = reach_want(reading, cfg)
@@ -129,6 +140,17 @@ def aim_step(reading, roll_now, pan_now, dist_cm=None, cfg=WRIST_AIM, roll_range
            ([f"row {reading['centre_y']:.0f}"] if reading.get("compact") and reading.get("centre_y") is not None else [])
     out["why"] = "lined up (" + ", ".join(bits) + ")"
     return out
+
+
+def aim_move_s(d_roll=0, d_pan=0, d_reach_cm=0.0, cfg=WRIST_AIM):
+    """Seconds for one correction move: a bigger one takes longer, a small one is slow rather than
+    a twitch. With several joints the longest time wins and they all use it."""
+    t = 0.0
+    for d, key in ((abs(d_roll or 0), "roll"), (abs(d_pan or 0), "pan"), (abs(d_reach_cm or 0.0), "reach")):
+        if d:
+            lo, per, hi = cfg["move_s"][key]
+            t = max(t, min(hi, lo + d / per))
+    return t or cfg["move_s"]["pan"][0]
 
 
 def reach_want(reading, cfg=WRIST_AIM):
@@ -201,7 +223,8 @@ def aim_words(rounds):
         if r.get("done"):
             parts.append(f"look {r['round']} ({src}): {r['why']}")
         elif r.get("d_roll"):
-            parts.append(f"look {r['round']} ({src}): {r['why']}, wrist roll {r['d_roll']:+d}" + (" (capped)" if r.get("capped") else ""))
+            parts.append(f"look {r['round']} ({src}): {r['why']}, wrist roll {r['d_roll']:+d}"
+                         + (f" and pan {r['d_pan']:+d}" if r.get("d_pan") else "") + (" (capped)" if r.get("capped") else ""))
         elif r.get("d_pan"):
             parts.append(f"look {r['round']} ({src}): {r['why']}, pan {r['d_pan']:+d}" + (" (capped)" if r.get("capped") else ""))
         elif r.get("d_reach"):

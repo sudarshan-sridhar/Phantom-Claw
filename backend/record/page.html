@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -80,7 +80,6 @@
   <div class="tally">
     <div><b id="n-req">0</b><span>requests, last hour</span></div>
     <div><b id="n-arm">0</b><span>arm jobs</span></div>
-    <div><b id="n-stop">0</b><span>brain stops</span></div>
   </div>
 </header>
 <main>
@@ -99,7 +98,6 @@
   <section class="w8"><h2>Arm jobs</h2><p class="note">How long each one took and how it ended. The black bar is the middle value.</p><canvas id="c-arm" data-h="250"></canvas></section>
   <section class="w4 alt"><h2>Reply time</h2><p class="note">How long each language model took to answer</p><canvas id="c-reply" data-h="250"></canvas></section>
   <section class="w8 alt"><h2>Joints</h2><p class="note">The six joint readings over the last minute, in motor steps</p><canvas id="c-joints" data-h="250"></canvas></section>
-  <section class="w12"><h2>Brain</h2><p class="note">Focus from 0 to 1 over the last two minutes. Shaded stretches are eyes-closed stops.</p><canvas id="c-brain" data-h="190"></canvas></section>
 </main>
 <footer id="foot"></footer>
 <div id="tip"></div>
@@ -361,8 +359,8 @@ function draw(d) {
   last = d;
   document.getElementById("n-req").textContent = d.requests_seen;
   document.getElementById("n-arm").textContent = d.arm_jobs.length;
-  document.getElementById("n-stop").textContent = d.brain.marks.filter(m => m.state === "stop").length;
-  drawWho(d); drawJobs(d); drawArm(d); drawReplies(d); drawJoints(d); drawBrain(d); footer(d);
+
+  drawWho(d); drawJobs(d); drawArm(d); drawReplies(d); drawJoints(d); footer(d);
 }
 
 async function refresh() {

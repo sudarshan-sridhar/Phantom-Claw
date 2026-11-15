@@ -613,14 +613,20 @@ class Pipeline:
             r.update(chosen=lead, group=merlin.pick_group(lead, self.rng), reason=why, source=source,
                      mline=self.rng.choice(merlin.GROUP_LINES).format(name=CAST[lead]["name"]))
             return r
-        argue = force_argue if force_argue is not None else (
-            not to_merlin and kind_agent is None and merlin.should_argue(self.rng))
+        # One voice per request unless PHANTOM_CHATTER=1: the others do not argue over the job
+        # and Merlin hands it on without a line, so nobody talks over the one doing the work.
+        chatter = os.environ.get("PHANTOM_CHATTER", "").strip() == "1"
+        if force_argue is not None:
+            argue = force_argue
+        else:
+            argue = chatter and not to_merlin and kind_agent is None and merlin.should_argue(self.rng)
         if argue:
             argued, chosen, mline = merlin.argue(self.rng)
             r.update(chosen=chosen, argued=argued, mline=mline, reason="argued", source="argument")
         else:
             chosen, why, source = await self.pick_by_kind(text)
-            r.update(chosen=chosen, mline=merlin.merlin_handoff(chosen, self.rng), reason=why, source=source)
+            mline = merlin.merlin_handoff(chosen, self.rng) if (chatter or to_merlin) else None
+            r.update(chosen=chosen, mline=mline, reason=why, source=source)
         return r
 
     async def handle(self, text: str, agent: str | None = None, force_argue: bool | None = None) -> dict:
