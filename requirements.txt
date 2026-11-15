@@ -1,0 +1,16 @@
+fastapi
+uvicorn[standard]
+httpx
+python-dotenv
+anthropic
+numpy
+scipy
+opencv-contrib-python
+feetech-servo-sdk
+faster-whisper
+sounddevice
+webrtcvad
+pynput
+psycopg[binary]
+pylsl
+pytest

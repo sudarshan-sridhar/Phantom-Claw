@@ -1,0 +1,127 @@
+{
+ "note": "Grips taught by hand with setup/tools/teach_grip.py for the general pick and place skills. Raw ticks. r_cm is the object's distance from the arm base as Gemini reads it from the overhead picture (for a cup, its rim nearest the arm). tall spots here add to the ones in bottle_teach.json.",
+ "low": {
+  "near": {
+   "r_cm": 27.2,
+   "pan": 2066,
+   "via": {
+    "lift": 1971,
+    "elbow": 2719,
+    "wrist_flex": 2178
+   },
+   "grasp": {
+    "lift": 2121,
+    "elbow": 2719,
+    "wrist_flex": 2178
+   },
+   "roll": 2016,
+   "gripper_open": 1750,
+   "gripped_at": 1459,
+   "object": "sharpie",
+   "shake_ticks": 1,
+   "taught": "2026-11-15T06:05:05",
+   "photo": "teach_grip_low_near_overhead.jpg",
+   "look": "seen as 'sharpie', tier low; distance given by hand",
+   "bearing_deg": 6.86,
+   "axis_deg": 6.3,
+   "rel_axis_deg": -0.6,
+   "via_taught": {
+    "lift": 1173,
+    "elbow": 2993,
+    "wrist_flex": 2185
+   }
+  },
+  "open": 1619,
+  "closed": 1448,
+  "far": {
+   "r_cm": 44.2,
+   "pan": 2268,
+   "via": {
+    "lift": 2638,
+    "elbow": 1873,
+    "wrist_flex": 2202
+   },
+   "grasp": {
+    "lift": 2738,
+    "elbow": 1873,
+    "wrist_flex": 2202
+   },
+   "roll": 2016,
+   "gripper_open": 1750,
+   "gripped_at": 1436,
+   "object": "sharpie",
+   "shake_ticks": 15,
+   "taught": "2026-11-15T06:07:27",
+   "photo": "teach_grip_low_far_overhead.jpg",
+   "look": "seen as 'sharpie', tier low; distance given by hand",
+   "bearing_deg": 19.76,
+   "axis_deg": 16.0,
+   "rel_axis_deg": -3.8,
+   "via_taught": {
+    "lift": 929,
+    "elbow": 3076,
+    "wrist_flex": 2400
+   }
+  }
+ },
+ "stick": {
+  "near": {
+   "r_cm": 25.5,
+   "pan": 1856,
+   "via": {
+    "lift": 2044,
+    "elbow": 2873,
+    "wrist_flex": 1468
+   },
+   "grasp": {
+    "lift": 2214,
+    "elbow": 2873,
+    "wrist_flex": 1468
+   },
+   "roll": 2018,
+   "gripper_open": 1737,
+   "gripped_at": 1385,
+   "object": "glue stick",
+   "shake_ticks": 13,
+   "taught": "2026-11-15T10:28:51",
+   "photo": "teach_grip_stick_near_overhead.jpg",
+   "look": "photo saved; nothing read from it; distance given by hand",
+   "seen_pan": 1857,
+   "via_taught": {
+    "lift": 2207,
+    "elbow": 2527,
+    "wrist_flex": 1468
+   }
+  },
+  "open": 1815,
+  "closed": 1455,
+  "far": {
+   "r_cm": 35.45,
+   "pan": 1978,
+   "via": {
+    "lift": 2554,
+    "elbow": 2204,
+    "wrist_flex": 1474
+   },
+   "grasp": {
+    "lift": 2724,
+    "elbow": 2204,
+    "wrist_flex": 1474
+   },
+   "roll": 2017,
+   "gripper_open": 1833,
+   "gripped_at": 1385,
+   "object": "glue stick",
+   "shake_ticks": 3,
+   "taught": "2026-11-15T10:32:36",
+   "photo": "teach_grip_stick_far_overhead.jpg",
+   "look": "photo saved; nothing read from it; distance given by hand",
+   "seen_pan": 1943,
+   "via_taught": {
+    "lift": 2714,
+    "elbow": 2198,
+    "wrist_flex": 1472
+   }
+  }
+ }
+}
