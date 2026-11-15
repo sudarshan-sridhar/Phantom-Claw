@@ -64,6 +64,9 @@ class Vision:
     def locate(self, img, tries=3):
         """Ask Gemini for the bottle and the person in an overhead picture and place them on the desk.
         Asks again (up to three times) if the answer has no usable bottle box."""
+        # The phone may have been moved since the map was made: line the map up again from the markers.
+        from . import markers
+        self.markers_used = markers.refresh(self.table, img)
         boxes = {"bottle": None, "person": None}
         for _ in range(tries):
             boxes = parse_boxes(gemini.ask_json(img, OVERHEAD_PROMPT, size=(960, 540)))
