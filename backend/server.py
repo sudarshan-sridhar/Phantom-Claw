@@ -153,6 +153,66 @@ async def audio(file: str):
     return FileResponse(p, media_type="audio/mpeg")
 
 
+# ---------------------------------------------------------------- voice control (backend/listen)
+# Additions only: an event relay for the listener and the brain process, and the shared
+# listening state so the listener and the overlay agree on asleep or awake.
+
+EVENT_TYPES = {"hear", "listen", "brain"}
+listen_state: dict[str, Any] = {"awake": False, "source": None, "changed_at": None}
+
+_WAKE_LINES = ["We're listening.", "All ears. Go ahead.", "Awake. Who do you need?", "We're here. Go on."]
+_SLEEP_LINES = ["Resting now.", "Going quiet.", "Say the word when you need us."]
+
+
+@app.post("/api/event")
+async def api_event(body: dict[str, Any]):
+    if body.get("type") not in EVENT_TYPES:
+        raise HTTPException(400, "type must be one of: " + ", ".join(sorted(EVENT_TYPES)))
+    await hub.emit(dict(body))
+    return {"ok": True}
+
+
+class ListenBody(BaseModel):
+    awake: bool
+    say: bool = True
+    source: str | None = None
+
+
+@app.get("/api/listen")
+async def api_listen_get():
+    return {"awake": listen_state["awake"], "source": listen_state["source"], "changed_at": listen_state["changed_at"]}
+
+
+async def _listen_line(awake: bool) -> None:
+    """Merlin says one short line so the owner hears the change worked."""
+    import random
+
+    pipeline = get_pipeline()
+    line = random.choice(_WAKE_LINES if awake else _SLEEP_LINES)
+    clip = await pipeline.speak("merlin", line)
+    await hub.emit(
+        {"type": "merlin", "chosen": None, "say": line, "audio_url": clip["audio_url"], "duration_s": clip["duration_s"], "argued": []}
+    )
+    # The arm is the body of whoever speaks, so Merlin gets her gesture too.
+    asyncio.ensure_future(pipeline._gesture("merlin", clip["duration_s"], set_states=True))
+
+
+@app.post("/api/listen")
+async def api_listen_set(body: ListenBody):
+    import time
+
+    changed = body.awake != listen_state["awake"]
+    if changed:
+        listen_state.update({"awake": body.awake, "source": body.source, "changed_at": time.time()})
+        await hub.emit({"type": "listen", "awake": body.awake, "source": body.source})
+        if body.say:
+            try:
+                await _listen_line(body.awake)
+            except Exception as e:  # noqa: BLE001
+                await hub.emit({"type": "error", "where": "listen", "message": f"{type(e).__name__}: {e}"[:300]})
+    return {"awake": listen_state["awake"], "changed": changed}
+
+
 @app.websocket("/ws")
 async def ws(websocket: WebSocket):
     await websocket.accept()

@@ -159,6 +159,28 @@ html, body {
 #link i { width: 6px; height: 6px; border: 1px solid var(--beige); }
 #link.live i { background: var(--beige); }
 
+/* Listening mark, sits just right of the link mark. Beige when listening. */
+#ear {
+  left: 90px;
+  bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px 1px 6px;
+  background: var(--teal);
+  color: var(--beige-light);
+  font-size: 13px;
+  line-height: 17px;
+  border-width: 1px;
+}
+#ear i { width: 6px; height: 6px; border: 1px solid var(--beige); }
+#ear.on { background: var(--beige); color: var(--ink); }
+#ear.on i { background: var(--ink); border-color: var(--ink); }
+
+/* Asleep: the pets are off screen and hidden. */
+#world.away { visibility: hidden; }
+.bubble.heard { font-size: 16px; line-height: 19px; }
+
 /* Screenshot runs only (see app.js). */
 .keepalive { position: fixed; left: 0; top: 0; width: 2px; height: 2px; animation: keepalive 1s linear infinite; }
 @keyframes keepalive { from { opacity: 0.01; } to { opacity: 0.02; } }

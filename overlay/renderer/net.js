@@ -27,6 +27,7 @@ const Net = (() => {
       delay = 1000;
       App.setLink('live');
       syncCast();
+      syncListen();
     };
     sock.onmessage = (msg) => {
       let ev = null;
@@ -54,6 +55,16 @@ const Net = (() => {
         if (c && c.id && c.state) App.handleEvent({ type: 'agent_state', agent: c.id, state: c.state });
       }
     } catch (e) { /* the overlay works without it */ }
+  }
+
+  // Asleep or listening, so the pets only show while the listener is awake.
+  async function syncListen() {
+    try {
+      const res = await fetch(base + '/api/listen');
+      if (!res.ok) return;
+      const data = await res.json();
+      App.handleEvent({ type: 'listen', awake: !!(data && data.awake) });
+    } catch (e) { /* stays asleep */ }
   }
 
   return { start };

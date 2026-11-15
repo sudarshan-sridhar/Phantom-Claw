@@ -8,6 +8,8 @@ const fs = require('fs');
 const path = require('path');
 
 const SHORTCUT = 'CommandOrControl+Shift+Space';
+// Backup for the listener's own Ctrl+Shift tap: toggles listening through the server.
+const LISTEN_SHORTCUT = 'CommandOrControl+Shift+L';
 
 const argv = process.argv.slice(1);
 const flag = (name) => argv.includes('--' + name);
@@ -18,6 +20,7 @@ const value = (name) => {
 
 const FLAGS = {
   demo: flag('demo'),
+  show: flag('show'),   // keep the avatars on screen even while the listener is asleep
   selftest: flag('selftest'),
   fallback: flag('fallback'),
   shots: (value('shots') || '').split(',').map((s) => parseInt(s, 10)).filter((n) => n > 0),
@@ -126,6 +129,7 @@ function quitApp() {
 function showMenu() {
   const menu = Menu.buildFromTemplate([
     { label: 'Talk to the team (Ctrl+Shift+Space)', click: () => openInput(null) },
+    { label: 'Start or stop listening (Ctrl+Shift)', click: () => win && win.webContents.send('toggle-listen') },
     { label: 'Stop the arm', click: () => win && win.webContents.send('stop-arm') },
     { type: 'separator' },
     { label: 'Quit Phantom Claw', click: quitApp },
@@ -236,6 +240,9 @@ app.whenReady().then(() => {
 
   if (!globalShortcut.register(SHORTCUT, () => openInput(null))) {
     console.log('could not register ' + SHORTCUT + ' (another app may own it)');
+  }
+  if (!globalShortcut.register(LISTEN_SHORTCUT, () => win && win.webContents.send('toggle-listen'))) {
+    console.log('could not register ' + LISTEN_SHORTCUT + ' (another app may own it)');
   }
 
   try {

@@ -9,4 +9,5 @@ contextBridge.exposeInMainWorld('overlay', {
   quit: () => ipcRenderer.send('quit'),
   onOpenInput: (fn) => ipcRenderer.on('open-input', (_e, agent) => fn(agent)),
   onStopArm: (fn) => ipcRenderer.on('stop-arm', () => fn()),
+  onToggleListen: (fn) => ipcRenderer.on('toggle-listen', () => fn()),
 });

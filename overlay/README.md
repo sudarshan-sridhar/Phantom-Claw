@@ -26,6 +26,7 @@ Add `--fallback` (for example `npx electron . --demo --fallback`) to see the cod
 ## Using it
 
 - The window covers the screen's work area (everything except the taskbar), is transparent and stays on top. Clicks pass through everywhere except on a pet or on the input bar.
+- Voice: with the listener running (`python -m backend.listen`), the pets stay off screen while it is asleep. "Phantom Claw, start", a quick Ctrl+Shift tap, or Ctrl+Shift+L brings them in; "Phantom Claw, stop" or the same keys send them away. The small mark next to the link mark reads asleep or listening. Add `--show` (`npm start -- --show`) to keep them on screen all the time.
 - Click a pet to ask it directly. Press Ctrl+Shift+Space (or click the tray icon) to ask the whole team and let Merlin choose.
 - The bar has a text field (Enter sends), Hold to talk (records the microphone, sends it to `/api/stt` as the form field `file`, then submits the words) and Stop (calls `/api/stop`). Esc closes it.
 - While someone has the arm, a Stop the arm button also shows at the top left under the arm status.

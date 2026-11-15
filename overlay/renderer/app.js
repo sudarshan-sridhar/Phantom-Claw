@@ -33,6 +33,11 @@ const App = (() => {
   let flags = { demo: false, server: 'http://127.0.0.1:8765' };
   let pets = [];
   let armStatus = null;
+  // Listening: asleep means the pets are off screen until "Phantom Claw, start" or the shortcut.
+  let listenAwake = false;
+  let presence = 'shown';               // shown, entering, leaving, hidden
+  let presenceAt = 0;                   // when entering or leaving finishes
+  let activeUntil = 0;                  // stay on screen a moment after the last activity
   let ticks = 0, tickStart = performance.now(), tickRate = 0;
 
   const now = () => performance.now() / 1000;
@@ -209,9 +214,18 @@ const App = (() => {
       if (p) taken.push(placeBubble(speechEl, p, taken));
     }
     for (const p of pets) {
+      if (p.heard && now() >= p.heard.until) p.heard = null;
+      const heard = p.heard;
       const thinking = p.state === 'thinking';
-      p.thinkEl.classList.toggle('hidden', !thinking);
-      if (thinking) {
+      p.thinkEl.classList.toggle('hidden', !(thinking || heard));
+      // What the listener heard stays in the pet's bubble until its reply comes.
+      p.thinkEl.classList.toggle('thinking', !heard);
+      p.thinkEl.classList.toggle('heard', !!heard);
+      if (heard) {
+        const txt = '\u201c' + heard.text + '\u201d';
+        if (p.thinkEl._dots !== txt) { p.thinkEl.querySelector('.text').textContent = txt; p.thinkEl._dots = txt; p.thinkEl._sig = ''; }
+        taken.push(placeBubble(p.thinkEl, p, taken));
+      } else if (thinking) {
         const n = 1 + (Math.floor(now() * 3) % 3);
         const dots = '.'.repeat(n).padEnd(3, ' ');
         if (p.thinkEl._dots !== dots) { p.thinkEl.querySelector('.text').textContent = dots; p.thinkEl._dots = dots; }
@@ -250,6 +264,96 @@ const App = (() => {
   function setLink(state) {
     linkEl.className = 'plaque ' + state;
     linkEl.querySelector('span').textContent = { live: 'linked', offline: 'offline', connecting: 'linking', demo: 'demo' }[state] || state;
+    if (state === 'offline') setListen(false);   // no server, nobody is listening
+    renderEar();
+  }
+
+  // ---------- listening: the small mark next to the link mark, and the pets coming and going ----------
+  const earEl = document.getElementById('ear');
+  function renderEar() {
+    if (!earEl) return;
+    earEl.classList.toggle('hidden', !!flags.demo);
+    earEl.classList.toggle('on', listenAwake);
+    const text = listenAwake ? 'listening' : 'asleep';
+    const span = earEl.querySelector('span');
+    if (span.textContent !== text) span.textContent = text;
+    earEl.style.left = (linkEl.offsetLeft + linkEl.offsetWidth + 6) + 'px';
+  }
+
+  function setListen(awake) {
+    const was = listenAwake;
+    listenAwake = !!awake;
+    if (was && !listenAwake) activeUntil = Math.max(activeUntil, now() + 1.5);  // room for Merlin's goodbye line
+    if (!was && listenAwake) for (const p of pets) p.perkAt = now();
+    renderEar();
+  }
+
+  async function toggleListen() {
+    if (flags.demo) { setListen(!listenAwake); return; }
+    try {
+      await fetch(flags.server + '/api/listen', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ awake: !listenAwake, source: 'overlay' }),
+      });
+    } catch (e) {
+      toast('The server is not reachable', 'error');
+    }
+  }
+
+  const alwaysShow = () => !!(flags.demo || flags.show);
+  const barOpen = () => !bar.classList.contains('hidden');
+  const busyNow = () => barOpen() || !!speech.current || speech.queue.length > 0 || pets.some((p) => p.state !== 'idle' || p.heard);
+  const floats = (p) => p.def.habit === 'float' || p.def.habit === 'drift';
+
+  // Walkers come in from the nearest side, Elizabeth and Merlin drift down from the top.
+  function edgeSpot(p, near) {
+    if (floats(p)) return { x: near.x, y: -12, kind: 'free' };
+    return { x: near.x < W / 2 ? -p.w : W + p.w, y: near.y, kind: near.kind || p.surface };
+  }
+
+  function trip(p, from, to, t, dur) {
+    p.move = { from, to, style: floats(p) ? 'drift' : 'walk', t0: t, dur, apex: 0 };
+    if (Math.abs(to.x - from.x) > 4) p.facing = to.x > from.x ? 1 : -1;
+    p.sleeping = false;
+    p.refreshClasses();
+  }
+
+  function enterAll(t) {
+    const fromHidden = presence === 'hidden';
+    world.classList.remove('away');
+    for (const p of pets) {
+      const home = clearSpot(p, () => HOME[p.id](p), 160);
+      if (fromHidden) { const s = edgeSpot(p, home); p.x = s.x; p.y = s.y; }
+      p.fall = null; p.dragging = false; p.forward = false;
+      const dur = rand(0.9, 1.2);
+      trip(p, { x: p.x, y: p.y }, home, t, dur);
+      p.restUntil = t + dur + rand(1, 3);
+    }
+    presence = 'entering';
+    presenceAt = t + 1.3;
+  }
+
+  function leaveAll(t) {
+    for (const p of pets) {
+      p.forward = false;
+      trip(p, { x: p.x, y: p.y }, edgeSpot(p, p), t, rand(0.8, 1.1));
+    }
+    presence = 'leaving';
+    presenceAt = t + 1.25;
+  }
+
+  function updatePresence(t) {
+    if (busyNow()) activeUntil = Math.max(activeUntil, t + 1.0);
+    const want = alwaysShow() || listenAwake || t < activeUntil;
+    if (want && (presence === 'hidden' || presence === 'leaving')) enterAll(t);
+    else if (!want && (presence === 'shown' || presence === 'entering')) leaveAll(t);
+    if (presence === 'entering' && t >= presenceAt) presence = 'shown';
+    if (presence === 'leaving' && t >= presenceAt) {
+      presence = 'hidden';
+      world.classList.add('away');
+      for (const p of pets) p.move = null;
+    }
   }
 
   // ---------- pets ----------
@@ -450,6 +554,7 @@ const App = (() => {
         }
         return true;
       }
+      if (presence === 'hidden' || presence === 'leaving') return false;
       if (this.active() || this.forward) return false;
       if (t >= this.restUntil) this.planNext(t);
       return !!this.move;
@@ -546,12 +651,13 @@ const App = (() => {
     const dt = Math.min(0.1, t - lastT);
     lastT = t;
     pumpSpeech(t);
+    updatePresence(t);
     let busy = false;
     for (const p of pets) busy = p.update(t, dt) || busy;
     for (const p of pets) { p.place(); p.animate(t); }
     layoutBubbles();
     renderStatus(t);
-    if (t - lastSpread > 1.5) { spreadOut(t); lastSpread = t; }
+    if (presence === 'shown' && t - lastSpread > 1.5) { spreadOut(t); lastSpread = t; }
     busy = busy || pets.some((p) => p.dragging || p.fall || p.speaking() || p.state === 'speaking');
     ticks++;
     const ms = performance.now();
@@ -578,16 +684,36 @@ const App = (() => {
         if (ev.named_agent && find(ev.named_agent)) find(ev.named_agent).perkAt = now();
         break;
       case 'merlin':
+        if (find('merlin')) find('merlin').heard = null;
         (ev.argued || []).forEach((a) => enqueueLine(a.agent, a.say, a.audio_url));
         if (ev.say) enqueueLine('merlin', ev.say, ev.audio_url);
         break;
       case 'agent_state': {
         const p = find(ev.agent);
-        if (p) p.setState(ev.state);
+        if (p) {
+          if (ev.state === 'idle') p.heard = null;
+          p.setState(ev.state);
+        }
         break;
       }
       case 'say':
+        if (find(ev.agent)) find(ev.agent).heard = null;
         enqueueLine(ev.agent, ev.text, ev.audio_url);
+        break;
+      case 'hear': {
+        // The listener caught a name: perk up now, before the LLM has even started.
+        const p = find(ev.agent);
+        if (p) {
+          p.heard = { text: String(ev.text || '').slice(0, 140), until: now() + 25 };
+          p.wake();
+          p.perkAt = now();
+          if (p.state === 'idle') p.setState('listening'); else p.refreshClasses();
+          p.comeForward();
+        }
+        break;
+      }
+      case 'listen':
+        if (typeof ev.awake === 'boolean') setListen(ev.awake);
         break;
       case 'arm':
         armStatus = { agent: ev.agent, skill: ev.skill, phase: ev.phase, at: now() };
@@ -600,6 +726,7 @@ const App = (() => {
         break;
       case 'error':
         toast('Trouble in ' + (ev.where || 'the server') + ': ' + String(ev.message || '').slice(0, 90), 'error');
+        if (ev.where === 'pipeline') pets.forEach((p) => { p.heard = null; });
         break;
       default:
         break;
@@ -612,6 +739,7 @@ const App = (() => {
   let press = null;
 
   function petAt(x, y) {
+    if (presence === 'hidden') return null;
     const pad = 4;
     for (let i = pets.length - 1; i >= 0; i--) {
       const r = pets[i].rect;
@@ -820,6 +948,13 @@ const App = (() => {
     pets = CAST.map((c, i) => new Pet(c, sprites[i]));
     window.overlay.onOpenInput((agent) => openBar(agent));
     window.overlay.onStopArm(stopArm);
+    if (window.overlay.onToggleListen) window.overlay.onToggleListen(toggleListen);
+    if (!alwaysShow()) {
+      // Start asleep and off screen; the server tells us if the listener is already awake.
+      presence = 'hidden';
+      world.classList.add('away');
+    }
+    renderEar();
     frame();
     if (flags.shots && flags.shots.length) {
       // Screenshot runs only: keep the compositor producing frames so
@@ -852,5 +987,5 @@ const App = (() => {
   };
 
   boot();
-  return { handleEvent, setLink, toast, find, enqueueLine, CAST, BY_ID };
+  return { handleEvent, setLink, toast, find, enqueueLine, CAST, BY_ID, presence: () => presence, listening: () => listenAwake };
 })();
