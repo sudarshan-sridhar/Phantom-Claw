@@ -11,6 +11,7 @@ from pathlib import Path
 
 SETUP = Path(__file__).resolve().parents[2] / "setup"
 
+JAW_CM = 4.7          # the jaws grip this far to one side of the line the base turns on
 JAW_OFFSET = 85      # the camera bearing reads this many ticks right of the pan that grips (from the 3 teachings)
 
 
@@ -35,6 +36,12 @@ class TableMap:
     def to_table(self, x_px, y_px):
         return _perspective(self.H, x_px, y_px)
 
+    def jaw_ticks(self, r_cm):
+        """How far the base must turn past an item's bearing to bring the jaws onto it. The jaws sit
+        to one side, so the nearer the item, the bigger the turn (85 ticks at 35 cm, 130 at 23 cm).
+        One fixed number put the jaws beside a bottle standing close in."""
+        return self.tpr * math.atan(JAW_CM / max(12.0, r_cm))
+
     def pan_for_bearing(self, rad):
         return self.pan_zero + self.tpr * rad
 
@@ -52,7 +59,7 @@ class TableMap:
             tx, ty = tx - self.base[0], ty - self.base[1]
             a = math.atan2(tx, ty)
             out["bottle"] = {"r_cm": math.hypot(tx, ty), "bearing_deg": math.degrees(a),
-                             "pan": self.pan_for_bearing(a) - JAW_OFFSET}
+                             "pan": self.pan_for_bearing(a) - self.jaw_ticks(math.hypot(tx, ty))}
         p = boxes.get("person")
         if p:
             ymin, xmin, ymax, xmax = p
@@ -71,7 +78,7 @@ class TableMap:
         """A desk point in the arm frame to distance, bearing and the pan that lines the jaws up with it."""
         a = math.atan2(x, y)
         return {"x_cm": round(x, 2), "y_cm": round(y, 2), "dist_cm": round(math.hypot(x, y), 2),
-                "bearing": round(math.degrees(a), 2), "pan": int(round(self.pan_for_bearing(a) - JAW_OFFSET))}
+                "bearing": round(math.degrees(a), 2), "pan": int(round(self.pan_for_bearing(a) - self.jaw_ticks(math.hypot(x, y))))}
 
     def place_box(self, box, tier="tall"):
         """Where an item in this box is on the desk. Standing things (tall, can): the bottom of the
