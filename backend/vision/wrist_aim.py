@@ -410,6 +410,14 @@ def read_aim(img, name=None, shape="auto", use_gemini=True, cfg=AIM, ask=None, l
     except Exception as e:             # a broken picture must not stop the pick
         tried["opencv_error"] = f"{type(e).__name__}: {str(e)[:80]}"
     tried["opencv"] = cv
+    # A reading far from the jaws is some other thing in the picture (a pen lying next to the
+    # scissors), not what the arm is hovering over. Never aim by it.
+    def near(r):
+        return r is not None and abs(r.get("offset_px") or 0.0) <= cfg.get("max_offset_px", 260)
+
+    if cv is not None and not near(cv):
+        tried["opencv_far"] = cv.get("offset_px")
+        cv = None
     if cv is not None and cv["confidence"] >= cfg["cv_min_conf"]:
         return {**cv, "tried": dict(tried)}
     if use_gemini:
@@ -419,7 +427,7 @@ def read_aim(img, name=None, shape="auto", use_gemini=True, cfg=AIM, ask=None, l
             g = None
             tried["gemini_error"] = f"{type(e).__name__}: {str(e)[:120]}"
         tried["gemini"] = g
-        if g is not None and g["confidence"] >= cfg["gemini_min_conf"]:
+        if g is not None and near(g) and g["confidence"] >= cfg["gemini_min_conf"]:
             return {**g, "tried": dict(tried)}
     return None
 
