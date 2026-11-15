@@ -1,0 +1,132 @@
+"""Offline tests for the record: table writes, request rows built from events, chart data."""
+import sqlite3
+import time
+
+from backend.record.collector import Collector, outcome
+from backend.record.store import Store
+from backend.record.web import charts_data
+
+
+def make_store(tmp_path):
+    return Store(None, sqlite_path=tmp_path / "rec.sqlite")
+
+
+def one_job(col, t0, agent="ban", skill="grip_bottle", phases=("start", "at_target", "gripped", "lifted", "put_back", "returning", "done")):
+    col.handle({"type": "request", "text": "grab the bottle", "named_agent": None}, t0)
+    col.handle({"type": "merlin", "chosen": agent, "say": "Yours.", "audio_url": "x", "argued": []}, t0 + 0.5)
+    col.handle({"type": "agent_state", "agent": agent, "state": "thinking"}, t0 + 0.6)
+    col.tracker.on_providers({"by_agent": {agent: {"provider": "gemini", "ms": 812, "at": t0 + 1.4}}})
+    col.handle({"type": "say", "agent": agent, "text": "Mine.", "audio_url": "y"}, t0 + 1.5)
+    col.handle({"type": "agent_state", "agent": agent, "state": "has_arm"}, t0 + 2.0)
+    for i, p in enumerate(phases):
+        col.handle({"type": "arm", "agent": agent, "skill": skill, "phase": p}, t0 + 2.0 + i)
+    col.handle({"type": "agent_state", "agent": agent, "state": "idle"}, t0 + 2.0 + len(phases))
+
+
+def test_tables_are_written_to_sqlite(tmp_path):
+    store = make_store(tmp_path)
+    col = Collector(store)
+    t0 = time.time() - 30
+    one_job(col, t0)
+    col.handle({"type": "brain", "state": "focus", "value": 0.62}, t0 + 12)
+    store.add("joints", {"time": t0 + 13, "joint": "gripper", "position": 1547.0})
+    store.flush()
+
+    db = sqlite3.connect(tmp_path / "rec.sqlite")
+    assert db.execute("SELECT count(*) FROM events").fetchone()[0] == 14   # 13 job events and one brain event
+    req = db.execute("SELECT agent, text, provider, reply_ms, arm_skill, arm_result, arm_ms FROM requests").fetchall()
+    assert req == [("ban", "grab the bottle", "gemini", 812, "grip_bottle", "put back", 6000)]
+    assert db.execute("SELECT state, value FROM brain").fetchall() == [("focus", 0.62)]
+    assert db.execute("SELECT joint, position FROM joints").fetchall() == [("gripper", 1547.0)]
+    # the whole event is kept as JSON too
+    data = db.execute("SELECT data FROM events WHERE type='say'").fetchone()[0]
+    assert '"Mine."' in data
+
+
+def test_gestures_are_not_counted_as_arm_jobs(tmp_path):
+    store = make_store(tmp_path)
+    col = Collector(store)
+    t0 = time.time() - 20
+    col.handle({"type": "request", "text": "hello", "named_agent": "king"}, t0)
+    col.handle({"type": "say", "agent": "king", "text": "Hm.", "audio_url": "z"}, t0 + 1)
+    for p in ("start", "returning", "done"):
+        col.handle({"type": "arm", "agent": "king", "skill": "gesture", "phase": p}, t0 + 2)
+    col.handle({"type": "agent_state", "agent": "king", "state": "idle"}, t0 + 3)
+    store.flush()
+    rows = store.select("requests", 0)
+    assert len(rows) == 1 and rows[0]["agent"] == "king" and rows[0]["arm_skill"] is None
+
+
+def test_outcomes():
+    assert outcome("grip_bottle", ["start", "at_target", "missed", "returning", "done"]) == "missed"
+    assert outcome("grip_bottle", ["start", "gripped", "lifted", "put_back", "done"]) == "put back"
+    assert outcome("grip_bottle", ["start", "gripped", "handed_over", "done"]) == "handed over"
+    assert outcome("point", ["start", "at_target", "returning", "done"]) == "refused"
+    assert outcome("grip_bottle", ["start", "at_target"]) == "stopped"
+
+
+def test_charts_data_summarises(tmp_path):
+    store = make_store(tmp_path)
+    col = Collector(store)
+    now = time.time()
+    one_job(col, now - 300, "ban")
+    one_job(col, now - 200, "elizabeth", phases=("start", "at_target", "missed", "returning", "done"))
+    one_job(col, now - 100, "escanor", skill="point", phases=("start", "at_target", "returning", "done"))
+    for i in range(10):
+        store.add("joints", {"time": now - 10 + i, "joint": "elbow_flex", "position": 2400.0 + i})
+    store.add("brain", {"time": now - 50, "state": "stop", "value": None})
+    store.add("brain", {"time": now - 45, "state": "clear", "value": None})
+    store.flush()
+
+    d = charts_data(store, minutes=60, now=now)
+    jobs = {j["agent"]: j["count"] for j in d["jobs"]}
+    assert jobs == {"escanor": 1, "elizabeth": 1, "ban": 1, "king": 0, "gowther": 0}
+    assert {j["agent"]: j["result"] for j in d["arm_jobs"]} == {"ban": "put back", "elizabeth": "missed", "escanor": "refused"}
+    assert d["replies"]["gemini"]["median_ms"] == 812
+    assert len(d["joints"]["elbow_flex"]) == 10
+    assert [m["state"] for m in d["brain"]["marks"]] == ["stop", "clear"]
+
+
+def test_unreachable_tiger_falls_back_to_sqlite(tmp_path):
+    # nothing listens on port 1, so the connection is refused
+    store = Store("postgresql://nobody:nothing@127.0.0.1:1/none", sqlite_path=tmp_path / "fb.sqlite")
+    store.add("brain", {"time": time.time(), "state": "focus", "value": 0.5})
+    store.flush()   # must not raise
+    st = store.status()
+    assert st["configured"] == "tiger" and st["backend"] == "sqlite" and not st["ok"] and st["error"]
+    assert st["buffered"]["brain"] == 0 and st["written"]["sqlite"]["brain"] == 1
+    assert len(store.select("brain", 0)) == 1   # the charts read the local copy
+
+
+class FlakyTiger:
+    """Stands in for PostgresDB: refuses to connect until `up` is set, then keeps rows."""
+    up = False
+    rows: dict = {}
+
+    def __init__(self, url):
+        if not FlakyTiger.up:
+            raise OSError("connection refused")
+        self.hypertables = True
+
+    def write(self, table, rows):
+        FlakyTiger.rows.setdefault(table, []).extend(rows)
+
+    def select(self, table, since):
+        return [r for r in FlakyTiger.rows.get(table, []) if r["time"] >= since]
+
+
+def test_outage_rows_are_copied_up_when_tiger_returns(tmp_path, monkeypatch):
+    from backend.record import store as store_mod
+    monkeypatch.setattr(store_mod, "PostgresDB", FlakyTiger)
+    FlakyTiger.up, FlakyTiger.rows = False, {}
+    store = Store("postgresql://example", sqlite_path=tmp_path / "fb.sqlite")
+    t = time.time()
+    store.add("joints", {"time": t, "joint": "gripper", "position": 1310.0})
+    store.flush()
+    assert store.active == "sqlite"
+    FlakyTiger.up = True
+    store.next_pg_try = 0   # do not wait out the retry delay
+    store.add("joints", {"time": t + 1, "joint": "gripper", "position": 1320.0})
+    store.flush()
+    assert store.active == "tiger" and store.ok
+    assert [r["position"] for r in FlakyTiger.rows["joints"]] == [1310.0, 1320.0]
