@@ -10,3 +10,24 @@ node_modules/
 __pycache__/
 *.pyc
 dist/
+# photos and video from the desk cameras (people are in them)
+setup/*.jpg
+setup/*.mp4
+setup/voice_samples/
+setup/voice_audition.html
+setup/shared_voice_search.json
+setup/voice_candidates.json
+setup/elevenlabs_voices.json
+# plan page and local notes
+plan/
+# generated at run time
+backend/cache/
+backend/notes.md
+overlay/test/out/
+overlay/assets/sprites/raw/
+.pytest_cache/
+# raw hand-demo recordings (the taught poses taken from them are in bottle_teach.json and bottle_pick.json)
+setup/*_demo.json
+setup/teach_bottle_*.json
+# Hack Dearborn artwork and fonts: kept local until the owner decides whether they can be public
+overlay/assets/hd/
