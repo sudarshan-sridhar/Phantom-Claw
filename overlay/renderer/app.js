@@ -64,18 +64,12 @@ const App = (() => {
   function lerpY(b, y0, y1) { return clamp(H * rand(y0, y1), b.top, b.floor); }
 
   // Each pet has a home in a different part of the screen, and roams from it.
-  // Each pet keeps to its own stretch of the bottom edge or the right edge, out of the way of
-  // the work in the middle of the screen. It shuffles a little along that stretch and no more.
-  const SPOT = {
-    escanor: (p) => SURFACES.floor(p, 0.34, 0.46),
-    gowther: (p) => SURFACES.floor(p, 0.52, 0.64),
-    king: (p) => SURFACES.floor(p, 0.70, 0.82),
-    merlin: (p) => SURFACES.right(p, 0.16, 0.30),
-    elizabeth: (p) => SURFACES.right(p, 0.40, 0.54),
-    ban: (p) => SURFACES.right(p, 0.64, 0.78),
-  };
-  const HOME = SPOT;
-  const ROAM = SPOT;
+  // The pets live on the L made by the bottom edge and the right edge of the screen, out of
+  // the way of the work in the middle. Any pet may stand anywhere along it, and they change
+  // places now and then.
+  const onTheL = (p) => (Math.random() < 0.62 ? SURFACES.floor(p, 0.04, 0.96) : SURFACES.right(p, 0.10, 0.86));
+  const HOME = { escanor: onTheL, elizabeth: onTheL, ban: onTheL, king: onTheL, gowther: onTheL, merlin: onTheL };
+  const ROAM = HOME;
   function pick(fns) { return fns[Math.floor(Math.random() * fns.length)](); }
 
   // How each habit travels, and how long it rests.
