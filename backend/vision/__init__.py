@@ -76,6 +76,52 @@ def in_grid(scene_out, table, margin=3.0):
     return scene_out
 
 
+PIN_MODEL = "claude-opus-5-5"
+
+
+def pin_down(img, item, table, asked=None):
+    """Place the one item the job is about exactly, with the stronger model. A box from the
+    quick scene call puts a standing thing anywhere between its base and its top (the glue stick
+    read 36 cm one look and 43 the next). Asked for the single point where it touches the desk,
+    Claude gives the same answer every time, in about a second. For a lying thing it gives the
+    two ends, which also fix its angle. Changes the item in place; on any failure leaves it alone."""
+    name = asked or item.get("name") or "object"
+    lying = item.get("tier") == "low"
+    if lying:
+        q = (f"This is a photo of a desk from above and slightly to one side. Find the {name} lying on the desk "
+             f"(the scene list calls it '{item.get('name')}'). Give the two ends of its long side, and for scissors "
+             'also the middle of the handles. Reply with JSON only: {"ends": [[y1, x1], [y2, x2]], "handle": [y, x] or null} '
+             "in 0 to 1000 units of the image height and width.")
+    else:
+        q = (f"This is a photo of a desk from above and slightly to one side. Find the {name} standing on the desk "
+             f"(the scene list calls it '{item.get('name')}'). Find the exact point where its bottom touches the desk "
+             '(its base, not its top or middle). Reply with JSON only: {"base": [y, x]} in 0 to 1000 units of the '
+             "image height and width.")
+    old = gemini.CLAUDE_VISION
+    try:
+        gemini.CLAUDE_VISION = PIN_MODEL
+        raw = gemini.ask_claude(img, q, timeout=8.0)
+    except Exception:
+        return item
+    finally:
+        gemini.CLAUDE_VISION = old
+    sx, sy = table.image_size[0] / 1000.0, table.image_size[1] / 1000.0
+    try:
+        if lying:
+            (y1, x1), (y2, x2) = raw["ends"]
+            h = raw.get("handle")
+            py, px = (h if (isinstance(h, list) and len(h) == 2) else ((y1 + y2) / 2.0, (x1 + x2) / 2.0))
+            item["axis_deg"] = round(table.axis_of(item.get("box"), ends=((y1, x1), (y2, x2))), 1)
+        else:
+            py, px = raw["base"]
+        x, y = table._arm_xy(float(px) * sx, float(py) * sy)
+        item.update(table.point(x, y))
+        item["pinned"] = PIN_MODEL
+    except Exception:
+        pass
+    return item
+
+
 class Vision:
     def __init__(self, setup_dir=None, overhead_index=cameras.OVERHEAD_INDEX, wrist_index=cameras.WRIST_INDEX):
         d = Path(setup_dir) if setup_dir else cameras.SETUP
@@ -117,6 +163,8 @@ class Vision:
         self.markers_used = markers.refresh(self.table, img)
         raw = gemini.ask_json(img, scene_prompt(name), size=(960, 540))
         out = in_grid(parse_scene(raw, self.table, want=name), self.table)
+        if name and out.get("match") is not None:
+            pin_down(img, out["match"], self.table, asked=name)
         out["markers_used"] = self.markers_used
         self.last_scene = out
         return out
