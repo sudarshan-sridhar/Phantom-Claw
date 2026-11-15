@@ -23,7 +23,7 @@ TIERS = ("tall", "can", "low")
 # Known names pick the tier; Gemini's height guess is used only for names not listed here.
 # Checked in this order, so "juice bottle" is tall and "juice can" is can.
 _LOW_WORDS = ("sharpie", "marker", "pen", "pencil", "scissors", "scissor", "highlighter", "screwdriver", "spoon",
-              "fork", "knife", "chopstick", "brush")
+              "fork", "knife", "chopstick", "brush", "earbud", "earphone", "airpod", "glue")
 _CAN_WORDS = ("can", "red bull", "redbull", "cup", "mug", "glass", "tin")
 _TALL_WORDS = ("bottle", "flask", "thermos")
 _CAN_LATE = ("juice", "soda", "coke", "pepsi", "sprite", "drink")

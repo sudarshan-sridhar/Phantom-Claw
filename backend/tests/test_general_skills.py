@@ -14,7 +14,7 @@ import pytest
 from backend.arm import FakeArm, validate
 from backend.arm import desk
 from backend.arm import skills as S
-from backend.tests.simbus import make_real
+from backend.tests.simbus import clean_setup, make_real
 from backend.vision import TableMap, Taught, load_tiers
 from backend.vision.scene import axis_angle, match_name, parse_scene, scene_prompt, tier_for
 
@@ -378,7 +378,7 @@ def test_real_pick_then_place_back():
     out, ph = rrun(arm, "pick", {"target": "the water bottle", "pace": 1.0})
     assert out["result"] == "holding" and ph == ["start", "seen", "at_target", "gripped", "lifted", "done"]
     assert bus.holding and arm.status()["held"]["name"] == "water bottle" and not arm.status()["at_rest"]
-    tall = load_tiers()["tall"]
+    tall = load_tiers(clean_setup())["tall"]
     tuck = tall.carry("normal")
     assert abs(bus.pos(2) - tuck["lift"]) <= 120 and abs(bus.pos(3) - tuck["elbow"]) <= 120
     pan_pick = bus.pos(1)

@@ -230,6 +230,30 @@ class FakeVision:
         return {"picture": True, "bottle": self._box(self.wrist_bottle_pan, here),
                 "person": self._box(self.wrist_person_pan, here)}
 
+    # pick's last aim with the wrist camera. aim_readings: a list, one reading per look (None in
+    # it: the picture cannot be read), or a function (look number, roll, pan) -> reading. Not set:
+    # every picture is unreadable, so pick keeps the overhead aim as before.
+    aim_readings = None
+    aim_delay = 0.0          # real seconds each look takes (a stop can come in meanwhile)
+
+    def wrist_aim(self, name=None, shape="auto", save_to=None, use_gemini=True):
+        import time
+        if not hasattr(self, "aim_looks"):
+            self.aim_looks = []
+        roll, pan = (self.bus.pos(5), self.bus.pos(1)) if self.bus is not None else (None, None)
+        n = len(self.aim_looks) + 1
+        self.aim_looks.append((n, roll, pan, name, str(save_to) if save_to else None))
+        if self.aim_delay:
+            time.sleep(self.aim_delay)
+        r = self.aim_readings
+        if callable(r):
+            got = r(n, roll, pan)
+        elif isinstance(r, (list, tuple)):
+            got = r[n - 1] if n - 1 < len(r) else None
+        else:
+            got = None
+        return {"picture": True, "aim": got, "tried": {}}
+
     def close_wrist(self):
         self.closed += 1
 
@@ -264,9 +288,32 @@ class FakeVision:
         return {"items": items, "person": person, "match": match_name(items, name) if name else None}
 
 
+BASE_FILES = ("my_follower_calibration_2026-11-14.json", "bottle_pick.json", "bottle_teach.json", "table_map.json")
+_clean_setup = None
+
+
+def clean_setup():
+    """A temp setup folder with only the files the arm needs to start (calibration, the bottle
+    grips, the table map) and no grip_teach.json, so grips taught on the real desk never change
+    a test. Made once per test run."""
+    global _clean_setup
+    if _clean_setup is None:
+        import shutil
+        import tempfile
+        from pathlib import Path
+        live = Path(__file__).resolve().parents[2] / "setup"
+        d = Path(tempfile.mkdtemp(prefix="phantom_setup_"))
+        for f in BASE_FILES:
+            shutil.copy(live / f, d / f)
+        _clean_setup = d
+    return _clean_setup
+
+
 def make_real(grip_ok=True, start=None, quiet=True, setup_dir=None, scene_items=None, **vision):
-    """A RealArm on a SimBus with FakeVision. Returns (arm, bus, vision, clock)."""
+    """A RealArm on a SimBus with FakeVision. Returns (arm, bus, vision, clock).
+    Without setup_dir it uses clean_setup(), never the live setup folder."""
     from backend.arm.real import RealArm
+    setup_dir = setup_dir or clean_setup()
     clock = VClock()
     bus = SimBus(clock, start=start, grip_ok=grip_ok)
     vis = FakeVision(clock, bus, **vision)

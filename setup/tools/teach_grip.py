@@ -10,14 +10,19 @@ What happens, said out loud first each time:
 2. Open the jaws around the object where they should grip it (a lying item: across its short
    side; a cup: on the wall nearest the arm) and hold still. Beep, the pose is read.
 3. Squeeze the jaws shut on it by hand and hold. Beep, the gripper is read.
-4. Lift the gripper straight up about five centimetres and hold. Beep, the pose above it is read,
-   and the overhead camera takes a picture so Gemini can say how far the object is from the base.
+4. Keep the jaws shut on it and lift it straight up off the desk, about five centimetres (a hand's
+   width), without folding the arm back home. Beep, the pose above it is read, and the overhead
+   camera takes a picture so Gemini can say how far the object is from the base. If the shoulder
+   moved more than MAX_LIFT_TICKS from the grasp (the arm was folded home), it says so and asks
+   again once; still too far, the pose above is made from the grasp instead (shoulder VIA_LIFT up).
 Saved into setup/grip_teach.json under tiers TIER / SPOT. The arm is left with torque off:
 put it back to rest by hand, then run any skill (it switches torque on itself).
 
 The object's distance is what the blend uses, so it must come from the overhead picture, the
 same way it is measured when the skill runs. If there is no picture, pass --r-cm by hand or the
-spot is saved without a distance and does not count yet.
+spot is saved without a distance and does not count yet. With --r-cm the photo is still saved,
+but its bearing and axis are not used (the hand is in that picture): the spot keeps the bearing
+and axis it had before, if any.
 
 This script was written, not run: check it on the arm with the area clear.
 """
@@ -38,6 +43,10 @@ TIERS = ("tall", "can", "low")
 SPOTS = ("near", "middle", "far", "farthest")
 DEFAULT_OBJECT = {"tall": "water bottle", "can": "can", "low": "sharpie"}
 GRIP_RANGE = (1305, 2788)
+MAX_LIFT_TICKS = 300      # the lifted pose may differ from the grasp by at most this much shoulder lift
+VIA_LIFT = 150            # otherwise the pose above is the grasp with the shoulder this much higher
+LIFT_SAY = ("Keep the jaws shut on it and lift it straight up off the desk, about five centimetres, "
+            "a hand's width. Do not fold the arm back home. Hold it there, still, for the photo.")
 
 
 def say(text):
@@ -99,8 +108,18 @@ def hold_and_read(bus, text, wait):
     return dict(zip(NAMES, mean)), shake
 
 
-def look_overhead(obj, tier, spot):
-    """(distance cm, bearing deg, axis deg or None, note) of the object from the overhead picture, or Nones."""
+def lifted_ok(grasp, above, limit=MAX_LIFT_TICKS):
+    """True when the lifted pose is a short straight lift from the grasp, not the arm folded home."""
+    return abs(above["lift"] - grasp["lift"]) <= limit
+
+
+def via_from_grasp(grasp, up=VIA_LIFT):
+    return {"lift": grasp["lift"] - up, "elbow": grasp["elbow"], "wrist_flex": grasp["wrist_flex"]}
+
+
+def look_overhead(obj, tier, spot, ask=True):
+    """(distance cm, bearing deg, axis deg or None, note) of the object from the overhead picture, or Nones.
+    ask=False only saves the picture (nothing is read from it)."""
     try:
         import cv2
         from backend.vision import Vision, cameras
@@ -109,6 +128,8 @@ def look_overhead(obj, tier, spot):
         if img is None:
             return None, None, None, "the overhead camera gives no picture"
         cv2.imwrite(str(SETUP / f"teach_grip_{tier}_{spot}_overhead.jpg"), img)
+        if not ask:
+            return None, None, None, "photo saved; nothing read from it"
         item = Vision().find(obj, img=img)
         if item is None:
             return None, None, None, f"Gemini did not find the {obj} in the picture"
@@ -143,12 +164,23 @@ def main():
         grasp, s1 = hold_and_read(bus, f"Torque is off. Open the jaws around the {obj} where they should grip it, "
                                        "and hold still.", a.wait)
         shut, s2 = hold_and_read(bus, "Now squeeze the jaws shut on it by hand, and hold still.", a.wait * 0.6)
-        above, s3 = hold_and_read(bus, "Keep it in the jaws and lift the gripper straight up about five centimetres. "
-                                       "Hold still for the photo.", a.wait * 0.6)
+        above, s3 = hold_and_read(bus, LIFT_SAY, a.wait * 0.6)
+        if not lifted_ok(grasp, above):
+            say(f"That is too far: the shoulder moved {abs(above['lift'] - grasp['lift'])} ticks from the grip, "
+                "so the arm was folded back. Put the jaws back on the object, then lift it only a hand's width.")
+            above, s3 = hold_and_read(bus, LIFT_SAY, a.wait * 0.8)
     finally:
         bus.close()
-    r, bearing, axis, note = look_overhead(obj, a.tier, a.spot)
-    if r is None and a.r_cm is not None:
+    via_taught = None
+    if not lifted_ok(grasp, above):
+        via_taught = pose3(above)
+        say("Still too far. I will make the pose above from the grip instead.")
+        print(f"lifted pose rejected: shoulder {above['lift']} vs grasp {grasp['lift']} (more than {MAX_LIFT_TICKS} apart)")
+        above = {**above, **via_from_grasp(grasp)}
+    hand_r = a.r_cm is not None
+    # with a distance given by hand the hand is in the photo: save it, but read nothing from it
+    r, bearing, axis, note = look_overhead(obj, a.tier, a.spot, ask=not hand_r)
+    if hand_r:
         r, note = a.r_cm, f"{note}; distance given by hand"
     print(note)
 
@@ -158,10 +190,19 @@ def main():
                             "overhead picture (for a cup, its rim nearest the arm). tall spots here add to the ones in "
                             "bottle_teach.json.")
     tier = data.setdefault(a.tier, {})
+    before = tier.get(a.spot) if isinstance(tier.get(a.spot), dict) else {}
     spot = {"r_cm": None if r is None else round(r, 1), "pan": grasp["pan"], "via": pose3(above), "grasp": pose3(grasp),
             "roll": grasp["wrist_roll"], "gripper_open": grasp["gripper"], "gripped_at": shut["gripper"],
             "object": obj, "shake_ticks": max(s1, s2, s3), "taught": datetime.now().isoformat(timespec="seconds"),
             "photo": f"teach_grip_{a.tier}_{a.spot}_overhead.jpg", "look": note}
+    if via_taught is not None:
+        spot["via_taught"] = via_taught          # what the hand gave, kept for a look; not used
+    if hand_r:
+        # keep the bearing and axis from before: the photo with the hand in it is not trusted for them
+        for k in ("bearing_deg", "axis_deg", "rel_axis_deg"):
+            if k in before:
+                spot[k] = before[k]
+        bearing = axis = None
     if bearing is not None:
         spot["bearing_deg"] = round(bearing, 1)
     if axis is not None and bearing is not None:

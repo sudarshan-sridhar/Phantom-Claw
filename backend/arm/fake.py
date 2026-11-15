@@ -24,6 +24,12 @@ Switches for the general skills (look, point_at, pick, place, hand_over):
                                                   PHANTOM_FAKE_TIERS=tall,can,low
 - hand_taken: False means nobody takes what hand_over holds out   PHANTOM_FAKE_TAKEN=0
 - overhead: False also makes look, point_at and pick report no_picture
+- aim_setting: which tiers line up with the wrist camera before going down (None reads
+  PHANTOM_WRIST_AIM: "low" by default, "all", "off")
+- wrist_reader: what the pretend wrist camera reads during that aim. None: a pretend item that
+  starts a little turned and to the left and answers the corrections as the real one did. A list:
+  scripted readings, one per look (None in it: the picture cannot be read). A function
+  (look number, roll, pan) -> reading or None.
 """
 import copy
 import math
@@ -114,6 +120,9 @@ class FakeArm:
         self.hand_taken = os.environ.get("PHANTOM_FAKE_TAKEN", "1") != "0"
         self.geom = _Geom()
         self._held, self._carry = None, False
+        self.aim_setting = None
+        self.wrist_reader = None
+        self.wrist_reads = []            # (look number, roll, pan) for each wrist look, for tests
 
     def tiers(self):
         from backend.vision.table import GripTier
@@ -515,6 +524,12 @@ class FakeArm:
         self._move(out, S.FETCH_OUT_S * k)
         if approach == "look_first":
             self._wait(S.FETCH_LOOK_FIRST_S)
+        aim = []
+        if tier.name in desk.aim_tiers(self.aim_setting):
+            aim = self._aim_with_wrist(plan, k)
+        if aim:
+            note += ". " + desk.aim_words(aim)
+        aim_extra = {"aim": aim} if aim else {}
         self._move({i: plan["grasp"][n] for i, n in ((2, "lift"), (3, "elbow"), (4, "wrist_flex"))}, S.FETCH_APPROACH_S * k)
         self._emit("at_target")
         self._wait(S.FETCH_CLOSE_S)
@@ -526,7 +541,7 @@ class FakeArm:
             self._emit("returning")
             self._move({**REST, 5: 2030}, S.FETCH_REST_S * k)
             self._emit("done")
-            return "missed", f"the gripper closed on nothing. {note}"
+            return "missed", f"the gripper closed on nothing. {note}", aim_extra
         grip = tier.closed or 1478
         self._joints[6] = grip
         self._holding = True
@@ -539,7 +554,59 @@ class FakeArm:
                       "width_cm": item.get("width_cm"), "tier_obj": tier, "person": s["person"]}
         self._carry = True
         self._emit("done")
-        return "holding", f"holding the {name}, gripped at {grip}. {note}", {"held": public(item)}
+        return "holding", f"holding the {name}, gripped at {grip}. {note}", {"held": public(item), **aim_extra}
+
+    def _wrist_read(self, n, plan):
+        roll, pan = self._joints.get(5, 2030), self._joints[1]
+        self.wrist_reads.append((n, roll, pan))
+        r = self.wrist_reader
+        if callable(r):
+            return r(n, roll, pan)
+        if isinstance(r, (list, tuple)):
+            return r[n - 1] if n - 1 < len(r) else None
+        # the pretend item: lined up at a roll 250 ticks lower and a pan 30 ticks lower than planned
+        if getattr(self, "_aim_truth", (None,))[0] is not plan:
+            self._aim_truth = (plan, roll - 250, pan - 30)
+        _, roll_ok, pan_ok = self._aim_truth
+        W = desk.WRIST_AIM
+        gain = W["pan_px_per_tick"] * (plan["dist_cm"] / W["pan_gain_ref_cm"] if W["pan_gain_scales"] else 1.0)
+        return {"angle_deg": round((roll - roll_ok) / W["roll_ticks_per_deg"], 1),
+                "offset_px": round((pan_ok - pan) * gain, 1), "confidence": 0.9, "source": "opencv"}
+
+    def _aim_with_wrist(self, plan, k):
+        """The same loop as RealArm._aim_with_wrist, on the pretend joints."""
+        W = desk.WRIST_AIM
+        stretch = 1.0 + 0.25 * (k - 1.0)
+        rounds = []
+        for n in range(1, W["rounds"] + 1):
+            self._wait(W["settle_s"] + 0.1)                   # settle, then the picture and OpenCV
+            reading = self._wrist_read(n, plan)
+            if reading is None:
+                rounds.append({"round": n, "unread": True, "why": "neither OpenCV nor Gemini was sure"})
+                self._emit(f"aiming {n}: could not read the wrist picture; keeping the aim it has")
+                break
+            roll_now, pan_now = self._joints.get(5, 2030), self._joints[1]
+            step = desk.aim_step(reading, roll_now, pan_now, plan["dist_cm"], pan_range=self.PAN_RANGE)
+            rec = {"round": n, "source": reading.get("source"), "angle_deg": reading.get("angle_deg"),
+                   "offset_px": reading.get("offset_px"), "confidence": reading.get("confidence"),
+                   **{key: step[key] for key in ("done", "d_roll", "d_pan", "capped", "why")}}
+            rounds.append(rec)
+            if step["done"]:
+                self._emit(f"aiming {n}: {step['why']}")
+                break
+            if step["roll"] is not None:
+                self._emit(f"aiming {n}: {step['why']}, wrist roll {step['d_roll']:+d} to {step['roll']}"
+                           + (" (capped)" if step["capped"] else ""))
+                self._move({5: step["roll"]}, max(W["min_move_s"], abs(step["d_roll"]) / W["roll_speed"]) * stretch)
+            elif step["pan"] is not None and step["d_pan"]:
+                self._emit(f"aiming {n}: {step['why']}, pan {step['d_pan']:+d} to {step['pan']}"
+                           + (" (capped)" if step["capped"] else ""))
+                self._move({1: step["pan"]}, max(W["min_move_s"], abs(step["d_pan"]) / W["pan_speed"]) * stretch)
+            else:
+                rec["why"] += "; cannot turn further"
+                self._emit(f"aiming {n}: {rec['why']}")
+                break
+        return rounds
 
     def _skill_place(self, where, pace, approach):
         k = S.fetch_stretch(pace)

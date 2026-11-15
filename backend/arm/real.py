@@ -75,7 +75,7 @@ def _wrist_fallback_default():
 
 class RealArm:
     def __init__(self, port="COM3", baud=1_000_000, setup_dir=None, port_handler=None, packet_handler=None,
-                 vision=None, wrist_fallback=None, clock=None, quiet=False):
+                 vision=None, wrist_fallback=None, clock=None, quiet=False, wrist_aim=None):
         d = Path(setup_dir) if setup_dir else SETUP
         self.setup_dir = d
         with open(d / "my_follower_calibration_2026-11-14.json") as f:
@@ -98,6 +98,9 @@ class RealArm:
         self.table = TableMap(d / "table_map.json")
         self._vision = vision                 # made on first use, so the cameras load only for fetch_bottle
         self.wrist_fallback = _wrist_fallback_default() if wrist_fallback is None else wrist_fallback
+        # which tiers pick lines up with the wrist camera before going down: None reads
+        # PHANTOM_WRIST_AIM (default "low"); or "all", "off", or a list of tier names
+        self.aim_setting = wrist_aim
 
         self._clock = clock or _RealClock()
         self._virtual = clock is not None     # tests drive a pretend clock together with a pretend bus
@@ -1058,6 +1061,13 @@ class RealArm:
         self._fblend(out, settle=False)
         if approach == "look_first":
             self._wait(S.FETCH_LOOK_FIRST_S)
+        aim = []
+        if tier.name in desk.aim_tiers(self.aim_setting):
+            aim = self._aim_with_wrist(name, plan["dist_cm"], k)
+        rolled = roll is not None or any(r.get("d_roll") for r in aim)
+        if aim:
+            note += ". " + desk.aim_words(aim)
+        aim_extra = {"aim": aim} if aim else {}
         self._fblend(self._three(grasp, S.FETCH_APPROACH_S * k))
         self._emit("at_target")
         self._held_tier = tier
@@ -1067,13 +1077,13 @@ class RealArm:
             self._forget_held()
             self._emit("missed")
             self._fblend([(6, tier.open, 0, S.FETCH_RELEASE_S)], settle=False)
-            back = self._three(via, S.FETCH_VIA_S * k) + ([(5, roll_home, 0, S.FETCH_VIA_S * k)] if roll is not None else [])
+            back = self._three(via, S.FETCH_VIA_S * k) + ([(5, roll_home, 0, S.FETCH_VIA_S * k)] if rolled else [])
             self._fblend(back, settle=False)
             self._emit("returning")
             self._fetch_back_to_rest(k)
             self._restore_base_torque()
             self._emit("done")
-            return "missed", f"the gripper closed on nothing. {note}"
+            return "missed", f"the gripper closed on nothing. {note}", aim_extra
         self._held_grip = grip
         self._emit("gripped")
         carry = tier.carry(lift_cm_style)
@@ -1082,11 +1092,80 @@ class RealArm:
             return self._lost_the_bottle(k, {"note": note}, "during the lift", what=f"the {name}")
         self._emit("lifted")
         self._held = {**public(item), "grip": grip, "rim_offset_cm": item.get("grip_at", {}).get("rim_offset_cm"),
-                      "carry": carry, "roll_home": roll_home if roll is not None else None,
+                      "carry": carry, "roll_home": roll_home if rolled else None,
                       "person": s.get("person"), "seen_at": self._now()}
         self._carry = True
         self._emit("done")
-        return "holding", f"holding the {name}, gripped at {grip}. {note}", {"held": public(item)}
+        return "holding", f"holding the {name}, gripped at {grip}. {note}", {"held": public(item), **aim_extra}
+
+    def _aim_with_wrist(self, name, dist_cm, k):
+        """From the hover pose, line the jaws up with the item using the wrist camera: up to
+        WRIST_AIM["rounds"] looks; each one corrects the wrist roll (first) or the pan, waits for the
+        move, and looks again, until the item runs straight up between the jaw tips. A picture
+        that cannot be read ends the loop and pick carries on with the aim it has. Each look's
+        picture is saved as setup/last_wrist_aim_N.jpg (and _N_read.jpg with the reading drawn).
+        Returns the rounds, for the result."""
+        W = desk.WRIST_AIM
+        stretch = 1.0 + 0.25 * (k - 1.0)          # pace slows these small moves only a little
+        rounds = []
+        for old in self.setup_dir.glob("last_wrist_aim_*.jpg"):
+            try:
+                old.unlink()
+            except OSError:
+                pass
+        self.trace.append(("wrist_aim",))
+        try:
+            for n in range(1, W["rounds"] + 1):
+                self._wait(W["settle_s"])
+                reading, why = self._wrist_aim_look(name, n)
+                if reading is None:
+                    rounds.append({"round": n, "unread": True, "why": why})
+                    self._emit(f"aiming {n}: could not read the wrist picture ({why}); keeping the aim it has")
+                    break
+                roll_now, pan_now = self._rd(5, POSITION), self._rd(1, POSITION)
+                step = desk.aim_step(reading, roll_now, pan_now, dist_cm, pan_range=self._pan_range)
+                rec = {"round": n, "source": reading.get("source"), "angle_deg": reading.get("angle_deg"),
+                       "offset_px": reading.get("offset_px"), "confidence": reading.get("confidence"),
+                       **{key: step[key] for key in ("done", "d_roll", "d_pan", "capped", "why")}}
+                rounds.append(rec)
+                if step["done"]:
+                    self._emit(f"aiming {n}: {step['why']}")
+                    break
+                if step["roll"] is not None:
+                    self._emit(f"aiming {n}: {step['why']}, wrist roll {step['d_roll']:+d} to {step['roll']}"
+                               + (" (capped)" if step["capped"] else ""))
+                    dur = max(W["min_move_s"], abs(step["d_roll"]) / W["roll_speed"]) * stretch
+                    self._fblend([(5, step["roll"], 0, dur)], settle=False)
+                elif step["pan"] is not None and step["d_pan"]:
+                    self._emit(f"aiming {n}: {step['why']}, pan {step['d_pan']:+d} to {step['pan']}"
+                               + (" (capped)" if step["capped"] else ""))
+                    dur = max(W["min_move_s"], abs(step["d_pan"]) / W["pan_speed"]) * stretch
+                    self._fblend([(1, step["pan"], 0, dur)], settle=False)
+                else:
+                    rec["why"] += "; cannot turn further"
+                    self._emit(f"aiming {n}: {rec['why']}")
+                    break
+        finally:
+            try:
+                self.vision.close_wrist()
+            except Exception:
+                pass
+        return rounds
+
+    def _wrist_aim_look(self, name, n):
+        """(reading, None) or (None, why not)."""
+        path = self.setup_dir / f"last_wrist_aim_{n}.jpg"
+        try:
+            got = self._call_vision(lambda: self.vision.wrist_aim(name, save_to=path))
+        except _Stopped:
+            raise
+        except Exception as e:
+            return None, f"{type(e).__name__}: {str(e)[:80]}"
+        if not isinstance(got, dict) or not got.get("picture"):
+            return None, "no wrist picture"
+        if got.get("aim") is None:
+            return None, "neither OpenCV nor Gemini was sure"
+        return got["aim"], None
 
     def _slipped(self, k, what):
         """The carried item is no longer in the jaws: go home and say so."""

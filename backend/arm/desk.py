@@ -22,6 +22,112 @@ ROLL_TICKS_PER_RAD = 4096 / (2 * math.pi)
 ROLL_RANGE = (1110, 2950)  # inside what the camera cable allows (1100 to 2960)
 
 
+# Last aim with the wrist camera, for pick (measured on the arm on 2026-11-15 with the king size
+# Sharpie; adjust here after the next real run). From the hover pose the wrist picture is read by
+# backend/vision/wrist_aim.py (the jaw gap centre and the jaw row live there, in AIM). Then:
+#   roll_new = roll_now - angle_deg * roll_ticks_per_deg     (angle: clockwise from vertical)
+#   pan_new  = pan_now + offset_px / pan_px_per_tick          (offset: item x minus jaw centre x)
+# Subtracting 400 ticks of roll turned a pen seen 35 degrees clockwise to vertical. Turning the
+# base 35 ticks lower moved the pen about 50 px right in the picture at 29.5 cm reach (1.4 px per
+# tick); the gain grows with reach (the camera swings further per tick), so it is scaled by
+# dist_cm / pan_gain_ref_cm when pan_gain_scales is on.
+WRIST_AIM = {
+    "tiers": ("low",),           # tiers that aim with the wrist camera by default (PHANTOM_WRIST_AIM=all|low|off)
+    "rounds": 3,                 # at most this many looks
+    "angle_tol_deg": 6.0,        # within this, the roll is left alone
+    "offset_tol_px": 25.0,       # within this (640 wide picture), the pan is left alone
+    "roll_ticks_per_deg": 4096 / 360.0,   # 11.38
+    "roll_sign": -1,             # roll_new = roll_now + roll_sign * angle * ticks_per_deg
+    "pan_px_per_tick": 1.4,
+    "pan_gain_ref_cm": 29.5,
+    "pan_gain_scales": True,
+    "pan_sign": 1,               # pan_new = pan_now + pan_sign * offset_px / gain
+    "max_roll_step": 500,        # ticks in one correction, never more
+    "max_pan_step": 80,
+    "settle_s": 0.3,             # wait after a move before the next picture
+    "roll_speed": 900,           # ticks per second for the correction moves (pace stretches them a little)
+    "pan_speed": 150,
+    "min_move_s": 0.4,
+}
+
+
+def aim_step(reading, roll_now, pan_now, dist_cm=None, cfg=WRIST_AIM, roll_range=ROLL_RANGE, pan_range=None):
+    """What one wrist reading asks for. The roll is corrected first and alone, since turning the
+    wrist turns the picture: the pan is only corrected once the angle is within tolerance (or the
+    item is round). Returns {"done", "roll", "pan", "d_roll", "d_pan", "capped", "why"}; roll and
+    pan are the new goals, or None when that joint stays."""
+    out = {"done": False, "roll": None, "pan": None, "d_roll": 0, "d_pan": 0, "capped": False, "why": ""}
+    ang, off = reading.get("angle_deg"), reading.get("offset_px")
+    angle_off = ang is not None and abs(ang) > cfg["angle_tol_deg"]
+    offset_off = off is not None and abs(off) > cfg["offset_tol_px"]
+    if angle_off:
+        want = cfg["roll_sign"] * ang * cfg["roll_ticks_per_deg"]
+        step = max(-cfg["max_roll_step"], min(cfg["max_roll_step"], want))
+        out["capped"] = abs(step) < abs(want) - 0.5
+        new = int(round(roll_now + step))
+        new = max(roll_range[0], min(roll_range[1], new))
+        if new != int(roll_now):
+            out.update(roll=new, d_roll=new - int(roll_now), why=f"turned {ang:+.0f} deg from the jaws")
+            return out
+        out["capped"] = False           # the wrist is at its limit: go on to the pan
+    if offset_off:
+        gain = cfg["pan_px_per_tick"]
+        if cfg.get("pan_gain_scales") and dist_cm:
+            gain *= max(0.4, min(2.5, dist_cm / cfg["pan_gain_ref_cm"]))
+        want = cfg["pan_sign"] * off / gain
+        step = max(-cfg["max_pan_step"], min(cfg["max_pan_step"], want))
+        out["capped"] = abs(step) < abs(want) - 0.5
+        new = int(round(pan_now + step))
+        if pan_range is not None:
+            new = max(pan_range[0], min(pan_range[1], new))
+        side = "left" if off < 0 else "right"
+        out.update(pan=new, d_pan=new - int(pan_now), why=f"{abs(off):.0f} px {side} of the jaw centre")
+        return out
+    out["done"] = True
+    bits = ([f"within {abs(ang):.0f} deg"] if ang is not None else ["round"]) + \
+           ([f"{abs(off):.0f} px"] if off is not None else [])
+    out["why"] = "lined up (" + ", ".join(bits) + ")"
+    return out
+
+
+def aim_tiers(setting=None):
+    """Which tiers aim with the wrist camera: from the arm's own setting, else PHANTOM_WRIST_AIM
+    ("low", the default; "all"; "off"), else WRIST_AIM["tiers"]."""
+    import os
+    s = setting if setting is not None else os.environ.get("PHANTOM_WRIST_AIM", "")
+    if isinstance(s, (tuple, list, set)):
+        return tuple(s)
+    s = str(s).strip().lower()
+    if s in ("all", "on", "1", "true"):
+        return ("tall", "can", "low")
+    if s in ("off", "0", "none", "false"):
+        return ()
+    if s:
+        return tuple(t.strip() for t in s.split(",") if t.strip())
+    return tuple(WRIST_AIM["tiers"])
+
+
+def aim_words(rounds):
+    """One line for the result detail from the rounds the aim loop kept."""
+    if not rounds:
+        return ""
+    parts = []
+    for r in rounds:
+        if r.get("unread"):
+            parts.append(f"look {r['round']}: could not read the wrist picture")
+            continue
+        src = r.get("source") or "?"
+        if r.get("done"):
+            parts.append(f"look {r['round']} ({src}): {r['why']}")
+        elif r.get("d_roll"):
+            parts.append(f"look {r['round']} ({src}): {r['why']}, wrist roll {r['d_roll']:+d}" + (" (capped)" if r.get("capped") else ""))
+        elif r.get("d_pan"):
+            parts.append(f"look {r['round']} ({src}): {r['why']}, pan {r['d_pan']:+d}" + (" (capped)" if r.get("capped") else ""))
+        else:
+            parts.append(f"look {r['round']} ({src}): {r['why']}")
+    return "wrist aim: " + "; ".join(parts)
+
+
 class Refuse(Exception):
     """A skill that will not move: result name and a plain reason."""
 

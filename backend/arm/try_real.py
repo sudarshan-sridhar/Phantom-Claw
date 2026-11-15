@@ -78,6 +78,8 @@ def show_general(skill, params):
         "pick": "look for the target, choose the tier from its name or height, refuse if untaught, too big or out of "
                 "reach; out above it with the jaws open (lying items: wrist roll set across them)"
                 + (", pause 1 s above it" if params.get("approach") == "look_first" else "")
+                + ", line up with the wrist camera (tiers " + (", ".join(desk_aim_tiers()) or "none")
+                + f": up to {aim_rounds()} looks, roll first, then pan)"
                 + f", down onto it, close, lift into the carry pose ({params.get('lift_cm_style')}), check it is still held, "
                   "stay holding",
         "place": f"turn to {params.get('where')!r} with the item tucked in, down to just above the spot"
@@ -87,6 +89,19 @@ def show_general(skill, params):
                      "let go and go home; nobody takes it: tuck back into the carry pose, still holding",
     }
     print("  steps:", steps[skill])
+
+
+def desk_aim_tiers():
+    from . import desk
+    return desk.aim_tiers(_AIM_SETTING[0])
+
+
+def aim_rounds():
+    from . import desk
+    return desk.WRIST_AIM["rounds"]
+
+
+_AIM_SETTING = [None]
 
 
 def look_general(skill, params):
@@ -187,7 +202,11 @@ def main(argv=None):
     ap.add_argument("--plan", action="store_true", help="print the plan only; do not open the port")
     ap.add_argument("--look", action="store_true", help="with --plan and fetch_bottle: also ask the overhead camera")
     ap.add_argument("--yes", action="store_true", help="skip the 'area clear' question")
+    ap.add_argument("--aim", choices=["low", "all", "off"],
+                    help="pick: which tiers line up with the wrist camera before going down (default low, "
+                         "or PHANTOM_WRIST_AIM)")
     a = ap.parse_args(argv)
+    _AIM_SETTING[0] = a.aim
 
     where = {"near": a.near, "side": a.side} if a.near else _xy_or_name(a.where)
     raw = {"pace": a.pace, "hold_s": a.hold, "wait_s": a.wait, "flourish": a.flourish, "look_first": a.look_first,
@@ -206,7 +225,7 @@ def main(argv=None):
         return 0
 
     from .real import RealArm
-    arm = RealArm(port=a.port, wrist_fallback=False if a.no_wrist else None)
+    arm = RealArm(port=a.port, wrist_fallback=False if a.no_wrist else None, wrist_aim=a.aim)
     st = arm.status()
     print("status:", st)
     if not st["connected"]:
