@@ -1,0 +1,68 @@
+{
+  "escanor": {
+    "model": "gpt-image-1-mini",
+    "size": "1024x1024",
+    "quality": "medium",
+    "background": "transparent",
+    "faces": "right",
+    "prompt": "Original pixel art game sprite of a lion cub: round golden face, a big fluffy deep orange mane all around the face, small round ears, open eyes and a proud happy smile with the chin up, a short tail with an orange tuft, and a tiny yellow sun with short rays floating just above the mane. Low resolution pixel art sprite, about 32 by 32 pixels, shown scaled up so every pixel is a big crisp square. Cute chibi mascot with a big head and a small round body, full body, front three-quarter view, standing. Big round shiny eyes with a white highlight and a clear simple face. Thick solid black outline around the whole character. Flat colours, at most 10 colours: gold #F5A623, deep orange #C1440E, warm yellow, white and black. Plain fully transparent background, the character centered with empty space around it. Hard pixel edges only: no glow, no blur, no gradients, no anti-aliasing. No text, no letters, no frame, no floor, no cast shadow, no scenery. An original character design, not based on any existing character, logo or artwork.",
+    "raw": "raw/escanor.png",
+    "sprite": "escanor.png",
+    "generated_at": "2026-11-15T06:36:38.351Z"
+  },
+  "elizabeth": {
+    "model": "gpt-image-1-mini",
+    "size": "1024x1024",
+    "quality": "medium",
+    "background": "transparent",
+    "faces": "right",
+    "prompt": "Original pixel art game sprite of a small gentle winged sprite creature with a round soft silver white body, little soft blue wings like a butterfly, pink cheeks, a small pink flower on its head and big kind eyes. Cute chibi desktop pet with a big head and a small body, full body visible, three-quarter view facing right. Retro 16-bit game sprite: chunky square pixels as if a 48 by 48 pixel sprite were scaled up, crisp dark outline one pixel thick, flat colours with simple two-tone shading, very limited palette of silver white #E8F1F8, soft blue #8ECAE6, pink #F4A6C0 and a dark navy outline. The character is centered with empty space around it on a fully transparent background. Hard pixel edges only: no glow, no blur, no soft gradients, no anti-aliasing. No text, no letters, no frame, no floor, no cast shadow, no scenery. An original character design, not based on any existing character, logo or artwork.",
+    "raw": "raw/elizabeth.png",
+    "sprite": "elizabeth.png",
+    "generated_at": "2026-11-15T06:18:24.863Z"
+  },
+  "ban": {
+    "model": "gpt-image-1-mini",
+    "size": "1024x1024",
+    "quality": "medium",
+    "background": "transparent",
+    "faces": "right",
+    "prompt": "Original pixel art game sprite of a fox kit sitting and facing the viewer: a round crimson red head with two big pointed ears, a simple cute face with two big round black eyes with white highlights, a small black nose and a confident little smirk, a pale silver muzzle and chest, a small pale silver tuft of hair on top of the head, and a big bushy crimson tail with a pale silver tip curled beside it. Simple shapes and few details. Low resolution pixel art sprite, about 32 by 32 pixels, shown scaled up so every pixel is a big crisp square. Cute chibi mascot with a big head and a small round body, full body, front three-quarter view, standing. Big round shiny eyes with a white highlight and a clear simple face. Thick solid black outline around the whole character. Flat colours, at most 10 colours: crimson #C1121F, dark red, pale silver #DCE3EA, white and black. Plain fully transparent background, the character centered with empty space around it. Hard pixel edges only: no glow, no blur, no gradients, no anti-aliasing. No text, no letters, no frame, no floor, no cast shadow, no scenery. An original character design, not based on any existing character, logo or artwork.",
+    "raw": "raw/ban.png",
+    "sprite": "ban.png",
+    "generated_at": "2026-11-15T06:38:53.472Z"
+  },
+  "king": {
+    "model": "gpt-image-1-mini",
+    "size": "1024x1024",
+    "quality": "medium",
+    "background": "transparent",
+    "faces": "right",
+    "prompt": "Original pixel art game sprite of a sleepy chubby bear cub with orange fur wearing a small green hoodie, eyes closed, sitting lazily on a small soft green pillow. Cute chibi desktop pet with a big head and a small body, full body visible, three-quarter view facing right. Retro 16-bit game sprite: chunky square pixels as if a 48 by 48 pixel sprite were scaled up, crisp dark outline one pixel thick, flat colours with simple two-tone shading, very limited palette of orange #F4A261, green #2D6A4F, light green and a dark brown outline. The character is centered with empty space around it on a fully transparent background. Hard pixel edges only: no glow, no blur, no soft gradients, no anti-aliasing. No text, no letters, no frame, no floor, no cast shadow, no scenery. An original character design, not based on any existing character, logo or artwork.",
+    "raw": "raw/king.png",
+    "sprite": "king.png",
+    "generated_at": "2026-11-15T06:18:51.026Z"
+  },
+  "gowther": {
+    "model": "gpt-image-1-mini",
+    "size": "1024x1024",
+    "quality": "medium",
+    "background": "transparent",
+    "faces": "right",
+    "prompt": "Original pixel art game sprite of a small goat kid with magenta pink fur, two small cream horns, big round glasses and a flat expressionless face. Cute chibi desktop pet with a big head and a small body, full body visible, three-quarter view facing right. Retro 16-bit game sprite: chunky square pixels as if a 48 by 48 pixel sprite were scaled up, crisp dark outline one pixel thick, flat colours with simple two-tone shading, very limited palette of magenta pink #D63384, light pink, cream, grey glass and a dark plum outline. The character is centered with empty space around it on a fully transparent background. Hard pixel edges only: no glow, no blur, no soft gradients, no anti-aliasing. No text, no letters, no frame, no floor, no cast shadow, no scenery. An original character design, not based on any existing character, logo or artwork.",
+    "raw": "raw/gowther.png",
+    "sprite": "gowther.png",
+    "generated_at": "2026-11-15T06:19:04.469Z"
+  },
+  "merlin": {
+    "model": "gpt-image-1-mini",
+    "size": "1024x1024",
+    "quality": "medium",
+    "background": "transparent",
+    "faces": "right",
+    "prompt": "Original pixel art game sprite of a baby wild boar (a piglet): dark violet fur, a round body, a pig snout with two nostrils, two small cream tusks, pointed ears, a little bristly mane on the back, calm gold eyes, and a small gold orb floating beside it. Low resolution pixel art sprite, about 32 by 32 pixels, shown scaled up so every pixel is a big crisp square. Cute chibi mascot with a big head and a small round body, full body, front three-quarter view, standing. Big round shiny eyes with a white highlight and a clear simple face. Thick solid black outline around the whole character. Flat colours, at most 10 colours: dark violet #3C096C, lighter purple, gold #F5C400, cream, white and black. Plain fully transparent background, the character centered with empty space around it. Hard pixel edges only: no glow, no blur, no gradients, no anti-aliasing. No text, no letters, no frame, no floor, no cast shadow, no scenery. An original character design, not based on any existing character, logo or artwork.",
+    "raw": "raw/merlin.png",
+    "sprite": "merlin.png",
+    "generated_at": "2026-11-15T06:37:04.676Z"
+  }
+}

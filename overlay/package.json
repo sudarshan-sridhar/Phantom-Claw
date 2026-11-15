@@ -1,0 +1,19 @@
+{
+  "name": "phantom-claw-overlay",
+  "version": "0.1.0",
+  "description": "Phantom Claw desktop overlay: six pixel pets that live along the bottom of the screen.",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "demo": "electron . --demo",
+    "sprites": "node tools/make_sprites.mjs",
+    "snap": "node tools/make_sprites.mjs --snap-only",
+    "shot": "electron . --demo --shots=4000,11500,16000,22500 --quit-after=24000",
+    "selftest": "electron . --demo --selftest"
+  },
+  "devDependencies": {
+    "electron": "^39.2.0",
+    "pngjs": "^7.0.0"
+  }
+}

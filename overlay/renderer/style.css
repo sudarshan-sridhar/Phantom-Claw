@@ -1,0 +1,219 @@
+/* Chrome follows the Hack Dearborn: Conjure Reality brand.
+   Palette: #4b6359 gray turquoise, #d9c5a3 beige, #b0afc8 light purple, black, white,
+   plus darker and lighter steps of those. Flat fills, hard ink edges, no gradients.
+   Everything that moves is moved with transforms only, so the compositor does the work. */
+
+@font-face { font-family: 'HD Aseina'; src: url('../assets/hd/fonts/Aseina-Typeface.woff2') format('woff2'); }
+@font-face { font-family: 'HD Obra'; src: url('../assets/hd/fonts/KCObraLetraRegular.woff2') format('woff2'); }
+@font-face { font-family: 'HD Fell'; src: url('../assets/hd/fonts/IMFellEnglishSC-Regular.woff2') format('woff2'); }
+
+:root {
+  --teal: #4b6359;
+  --teal-dark: #33463e;
+  --beige: #d9c5a3;
+  --beige-light: #efe4d0;
+  --purple: #b0afc8;
+  --purple-dark: #8f8eab;
+  --ink: #000000;
+  --paper: #ffffff;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.hidden { display: none !important; }
+
+#world { position: fixed; inset: 0; pointer-events: none; }
+
+/* ---------- pets ---------- */
+.pet {
+  position: absolute;
+  left: 0;
+  top: 0;
+  will-change: transform;
+  pointer-events: none;
+}
+.pet .body, .pet .flip { position: absolute; inset: 0; }
+.pet .flip.left { transform: scaleX(-1); }
+.pet canvas.art {
+  position: absolute;
+  left: 0;
+  image-rendering: pixelated;
+}
+.pet canvas.upper { z-index: 2; }
+
+/* Breathing, floating, bouncing and twinkling are stepped from the update loop
+   in whole art pixels (no endless CSS animations), so a resting pet costs
+   only a few composites a second. */
+
+.pet .tag {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-top: 4px;
+  padding: 0 8px 1px;
+  border: 1px solid var(--ink);
+  font: 15px/18px 'HD Fell', serif;
+  white-space: nowrap;
+}
+
+.pet .sparkle {
+  position: absolute;
+  width: 30px;
+}
+.pet .sparkle.b { width: 22px; }
+
+.pet canvas.zz {
+  position: absolute;
+  image-rendering: pixelated;
+}
+
+/* ---------- speech: the artist's scroll, stretched only in the middle ---------- */
+.bubble {
+  position: absolute;
+  left: 0;
+  top: 0;
+  max-width: 340px;
+  border-style: solid;
+  border-width: 13px 34px;
+  border-image: url('../assets/hd/scroll.png') 50 136 50 136 fill / 13px 34px stretch;
+  font: 18px/21px 'HD Obra', serif;
+  color: var(--ink);
+  pointer-events: none;
+  will-change: transform;
+  z-index: 10;
+}
+.bubble .tail {
+  position: absolute;
+  left: var(--tail-x, 50%);
+  top: calc(100% + 9px);
+  width: 0;
+  height: 0;
+  margin-left: -8px;
+  border-left: 8px solid transparent;
+  border-right: 8px solid transparent;
+  border-top: 10px solid var(--ink);
+}
+.bubble.below .tail { top: auto; bottom: calc(100% + 9px); border-top: 0; border-bottom: 10px solid var(--ink); }
+.bubble.side .tail { display: none; }
+.bubble.thinking { padding: 0 2px; font-size: 22px; line-height: 16px; letter-spacing: 3px; }
+
+/* ---------- plaques: status, notes, link mark ---------- */
+.plaque {
+  position: fixed;
+  border: 2px solid var(--ink);
+  font: 15px/20px 'HD Fell', serif;
+  pointer-events: none;
+}
+#status {
+  top: 12px;
+  left: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 12px 3px 4px;
+  background: var(--teal);
+  color: var(--beige-light);
+  outline: 1px solid var(--beige);
+  outline-offset: -5px;
+  font-size: 16px;
+}
+#status img { width: 32px; height: 32px; }
+
+#toasts {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  pointer-events: none;
+}
+#toasts .plaque { position: static; padding: 3px 10px; background: var(--beige); color: var(--ink); max-width: 460px; }
+#toasts .plaque.request { background: var(--purple); font: 17px/21px 'HD Obra', serif; }
+#toasts .plaque.error { background: var(--ink); color: var(--paper); }
+
+#link {
+  left: 10px;
+  bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px 1px 6px;
+  background: var(--teal);
+  color: var(--beige-light);
+  font-size: 13px;
+  line-height: 17px;
+  border-width: 1px;
+}
+#link i { width: 6px; height: 6px; border: 1px solid var(--beige); }
+#link.live i { background: var(--beige); }
+
+/* Screenshot runs only (see app.js). */
+.keepalive { position: fixed; left: 0; top: 0; width: 2px; height: 2px; animation: keepalive 1s linear infinite; }
+@keyframes keepalive { from { opacity: 0.01; } to { opacity: 0.02; } }
+
+/* ---------- input bar ---------- */
+#bar {
+  position: fixed;
+  top: 10px;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px 7px 8px;
+  background: var(--teal);
+  border: 2px solid var(--ink);
+  outline: 1px solid var(--beige);
+  outline-offset: -5px;
+  color: var(--beige-light);
+  font: 15px 'HD Fell', serif;
+}
+#bar-wand { width: 26px; height: 28px; margin: -4px 0 -4px 2px; }
+#bar-who { font: 20px 'HD Aseina', serif; color: var(--beige); white-space: nowrap; padding: 0 4px; letter-spacing: 0.5px; }
+#bar input {
+  width: 320px;
+  padding: 5px 8px;
+  border: 2px solid var(--ink);
+  background: var(--beige-light);
+  color: var(--ink);
+  font: 17px 'HD Obra', serif;
+  outline: none;
+}
+#bar input::placeholder { color: #7a6f5c; }
+#bar input:focus { background: var(--paper); }
+
+#bar button, #stop-pill {
+  padding: 4px 10px 5px;
+  border: 2px solid var(--ink);
+  border-radius: 0;
+  background: var(--purple);
+  color: var(--ink);
+  font: 15px 'HD Fell', serif;
+  cursor: pointer;
+}
+#bar button:hover { background: #c4c3d8; }
+#bar button:active, #stop-pill:active { background: var(--purple-dark); }
+#bar-talk.recording { background: var(--beige); }
+#bar-talk.busy, #bar-send.busy { color: #4d4c63; }
+
+#bar button.stop, #stop-pill {
+  background: var(--ink);
+  color: var(--paper);
+  outline: 1px solid var(--paper);
+  outline-offset: -4px;
+}
+#bar button.stop:hover, #stop-pill:hover { background: #262626; }
+#bar-close { background: transparent !important; border-color: transparent !important; color: var(--beige) !important; }
+
+#stop-pill { position: fixed; left: 12px; top: 62px; font-size: 16px; padding: 7px 14px 8px; }
