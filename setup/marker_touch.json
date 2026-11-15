@@ -1,0 +1,38 @@
+{
+ "0": {
+  "pan": 1226,
+  "lift": 2477,
+  "elbow": 2115,
+  "wrist_flex": 2511,
+  "wrist_roll": 2012,
+  "gripper": 1319,
+  "shake_ticks": 0
+ },
+ "1": {
+  "pan": 2853,
+  "lift": 1964,
+  "elbow": 2840,
+  "wrist_flex": 2249,
+  "wrist_roll": 2012,
+  "gripper": 1319,
+  "shake_ticks": 0
+ },
+ "2": {
+  "pan": 2458,
+  "lift": 3001,
+  "elbow": 1503,
+  "wrist_flex": 2248,
+  "wrist_roll": 2011,
+  "gripper": 1319,
+  "shake_ticks": 0
+ },
+ "3": {
+  "pan": 1704,
+  "lift": 3013,
+  "elbow": 1363,
+  "wrist_flex": 2463,
+  "wrist_roll": 2011,
+  "gripper": 1319,
+  "shake_ticks": 0
+ }
+}

@@ -1,0 +1,1 @@
+{"note":"Bottle picked by the cap from the taught demo, 2026-11-14. Raw ticks, calibration 2026-11-14. Order: open gripper, via, grasp, close until it stalls (about 1547), lift.","gripper_open":1902,"via":{"pan":2032,"lift":1637,"elbow":2610,"wrist_flex":2229},"grasp":{"pan":2012,"lift":1964,"elbow":2475,"wrist_flex":1990,"wrist_roll":2030},"gripped_at":1547,"lift":{"lift":1800}}

@@ -1,0 +1,26 @@
+{
+ "merlin": {
+  "voice": "Monika Sogam \u2013 Sinister Creepy Voice",
+  "voice_id": "6aO1exAR9bDruq155LzQ"
+ },
+ "escanor": {
+  "voice": "Arthur - Deep and Powerful King",
+  "voice_id": "XALcFq0WF65uNKzmpcZW"
+ },
+ "elizabeth": {
+  "voice": "Gina G. - Gentle and soothing",
+  "voice_id": "tYzKsi9YaYrw6mEwO0vh"
+ },
+ "ban": {
+  "voice": "Jerry B. - New York Italian Mobster",
+  "voice_id": "QzTKubutNn9TjrB7Xb2Q"
+ },
+ "king": {
+  "voice": "Kryuu - Male Protagonist",
+  "voice_id": "T7TOOaZZ6tdlmJhBoEjH"
+ },
+ "gowther": {
+  "voice": "Sigma Centauri - AI Robot",
+  "voice_id": "bAq8AI9QURijOtmeFFqT"
+ }
+}

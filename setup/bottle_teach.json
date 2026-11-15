@@ -1,0 +1,72 @@
+{
+    "note":  "Bottle pickups taught by hand at different distances, raw ticks, calibration 2026-11-14. r_cm for mid and far is the bottle distance from the arm base as Gemini reads it from the overhead teaching photo (the same method used at run time). near r_cm was read off a later photo by eye.",
+    "near":  {
+                 "r_cm":  22.9,
+                 "bearing_deg_camera":  33.4,
+                 "pan":  2400,
+                 "via":  {
+                             "lift":  1392,
+                             "elbow":  2644,
+                             "wrist_flex":  2666
+                         },
+                 "grasp":  {
+                               "lift":  1230,
+                               "elbow":  2861,
+                               "wrist_flex":  2424
+                           },
+                 "gripper_open":  1793,
+                 "gripped_at":  1478,
+                 "set_down":  {
+                                  "lift":  1355,
+                                  "elbow":  2879,
+                                  "wrist_flex":  2232
+                              },
+                 "recording":  "teach_bottle_near.json"
+             },
+    "mid":  {
+                "r_cm":  23.2,
+                "bearing_deg_camera":  -8.5,
+                "pan":  1903,
+                "via":  {
+                            "elbow":  2656,
+                            "lift":  1554,
+                            "wrist_flex":  2280
+                        },
+                "grasp":  {
+                              "elbow":  2700,
+                              "lift":  1655,
+                              "wrist_flex":  2173
+                          },
+                "gripper_open":  1789,
+                "gripped_at":  1474,
+                "set_down":  {
+                                 "elbow":  2754,
+                                 "lift":  1520,
+                                 "wrist_flex":  2244
+                             },
+                "recording":  "teach_bottle_mid.json"
+            },
+    "far":  {
+                "r_cm":  39.3,
+                "bearing_deg_camera":  1.9,
+                "pan":  2056,
+                "via":  {
+                            "elbow":  1598,
+                            "lift":  2554,
+                            "wrist_flex":  2287
+                        },
+                "grasp":  {
+                              "elbow":  1840,
+                              "lift":  2554,
+                              "wrist_flex":  2003
+                          },
+                "gripper_open":  1782,
+                "gripped_at":  1483,
+                "set_down":  {
+                                 "elbow":  1363,
+                                 "lift":  2740,
+                                 "wrist_flex":  2371
+                             },
+                "recording":  "teach_bottle_far.json"
+            }
+}
