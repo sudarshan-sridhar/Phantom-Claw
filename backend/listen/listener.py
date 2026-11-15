@@ -294,21 +294,26 @@ class Listener:
         if rec.get("muted"):
             rec["action"] = "ignored, muted"
             return
+        # "Phantom Claw, give me the Sharpie" speaks to the team as a whole: it counts as a name,
+        # and it wakes a sleeping listener and is acted on in one go.
+        addressed = "phantom claw" in text.lower()
         if not self.awake:
             if cmd == "start":
                 rec["action"] = "wake"
                 self.set_awake(True, "voice")
-            else:
+                return
+            if not addressed:
                 rec["action"] = "ignored, asleep"
                 log(f"#{rec['n']} asleep, ignored")
-            return
+                return
+            self.set_awake(True, "voice")
         if cmd == "start":
             rec["action"] = "ignored, already awake"
             log(f"#{rec['n']} already awake")
             return
 
         agent, _i = find_agent(text)
-        if agent is None and self.require_name:
+        if agent is None and self.require_name and not addressed:
             rec["action"] = "ignored, no name"
             log(f"#{rec['n']} no name in it, ignored")
             return

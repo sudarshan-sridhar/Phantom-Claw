@@ -30,7 +30,7 @@ SERVER = os.environ.get("PHANTOM_SERVER", "http://127.0.0.1:8765").rstrip("/")
 # and Merlin picks who takes it by the kind of job. Chatter that isn't a request is dropped first
 # (see looks_like_request). In a noisy room set LISTEN_REQUIRE_NAME=1 (or --require-name) so only
 # utterances that name somebody go anywhere.
-REQUIRE_NAME = _flag("LISTEN_REQUIRE_NAME", False)
+REQUIRE_NAME = _flag("LISTEN_REQUIRE_NAME", True)   # only act when a name, or Phantom Claw, is said
 
 # Which speech to text does the work.
 #   auto   the local model when a big one (large-v3-turbo and so on) runs on the GPU, which beat

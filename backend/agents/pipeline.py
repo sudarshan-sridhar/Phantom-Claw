@@ -36,6 +36,9 @@ def plain_line(text: str) -> str:
     return out or (text or "")
 
 
+ACK = {"escanor": "Watch this.", "elizabeth": "Of course.", "ban": "On it.", "king": "Fine.",
+       "gowther": "On it.", "merlin": "On it."}
+
 POLISH_SYSTEM = (
     "You tidy one line that a character in a desk robot team is about to say out loud. Keep what it means and "
     "keep the character's manner. Make it sound like a person talking: plain words, one or two short sentences, "
@@ -144,6 +147,15 @@ class Pipeline:
         except Exception:  # noqa: BLE001 - a missing polish must never stop a job
             return line
 
+    async def say_quick(self, agent: str, text: str) -> None:
+        """One short line said at once, outside the usual order (an acknowledgement, or 'Handed.')."""
+        try:
+            clip = await self.speak(agent, text)
+            await self.emit({"type": "say", "agent": agent, "text": text, "audio_url": clip["audio_url"],
+                             "duration_s": clip["duration_s"]})
+        except Exception:  # noqa: BLE001 - a missing line must never stop a job
+            pass
+
     async def speak(self, agent: str, text: str) -> dict:
         """Make the clip. Returns {"audio_url", "duration_s"}; on failure audio_url is None."""
         if not self.speak_enabled:
@@ -194,6 +206,10 @@ class Pipeline:
             if auto:
                 ev["auto"] = True
             loop.call_soon_threadsafe(lambda: asyncio.ensure_future(self.emit(ev)))
+            if phase == "handed_over" and os.environ.get("PHANTOM_CHATTER", "").strip() != "1":
+                # say it the moment the jaws let go, not after the arm has folded home
+                self._said_handed = True
+                loop.call_soon_threadsafe(lambda: asyncio.ensure_future(self.say_quick(agent, "Handed.")))
 
         try:
             res = await asyncio.to_thread(self.arm.run, skill, dict(params), on_phase)
@@ -698,6 +714,10 @@ class Pipeline:
 
             chosen = route["chosen"]
             group = route["group"]
+            self._said_handed = False
+            if desk == "job" and os.environ.get("PHANTOM_CHATTER", "").strip() != "1":
+                # answer at once, while the cameras are still being read
+                asyncio.ensure_future(self.say_quick(chosen, ACK.get(chosen, "On it.")))
             merlin.note_chosen(chosen)
             if desk == "job":
                 merlin.note_arm_holder(chosen)
@@ -815,7 +835,7 @@ class Pipeline:
                 t_arm = time.monotonic()
                 arm_result = await self.run_plan(chosen, plan["arm"], result["decision"])
                 timing["arm_ms"] = int((time.monotonic() - t_arm) * 1000)
-                if arm_result.get("say"):
+                if arm_result.get("say") and not (getattr(self, "_said_handed", False) and arm_result.get("result") == "handed_over"):
                     # the line that says what really happened
                     followups.append(await self.say_line(run, chosen, arm_result["say"], gesture=True))
             elif plan["arm"]:
